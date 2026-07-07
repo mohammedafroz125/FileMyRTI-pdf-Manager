@@ -262,16 +262,17 @@ function Index() {
     const oldIndex = items.findIndex((i) => i.id === active.id);
     const newIndex = items.findIndex((i) => i.id === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
-    moveItem(oldIndex, newIndex > oldIndex ? 1 : -1);
-    // For multi-step drags, apply successive swaps.
-    if (Math.abs(newIndex - oldIndex) > 1) {
-      const dir = newIndex > oldIndex ? 1 : -1;
-      let cur = oldIndex + dir;
-      while (cur !== newIndex) {
-        moveItem(cur, dir);
-        cur += dir;
-      }
-    }
+    const newItems = arrayMove(items, oldIndex, newIndex);
+    setItems(newItems);
+    // Reorder item entries in the timeline to match, preserving original-page slots.
+    setTimeline((prev) => {
+      let cursor = 0;
+      return prev.map((entry) => {
+        if (entry.type !== "item") return entry;
+        const nextItem = newItems[cursor++];
+        return nextItem ? { ...entry, id: `item-${nextItem.id}`, itemId: nextItem.id } : entry;
+      });
+    });
   };
 
   const onTimelineDragEnd = (e: DragEndEvent) => {
