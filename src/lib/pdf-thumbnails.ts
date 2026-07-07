@@ -23,7 +23,7 @@ export async function renderPdfThumbnails(
     out.push(canvas.toDataURL("image/jpeg", 0.7));
     page.cleanup();
   }
-  await doc.destroy();
+  await loadingTask.destroy();
   return out;
 }
 
