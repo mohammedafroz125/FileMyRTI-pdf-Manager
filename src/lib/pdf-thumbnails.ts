@@ -1,12 +1,28 @@
-import * as pdfjs from "pdfjs-dist";
-import workerSrc from "pdfjs-dist/build/pdf.worker.mjs?url";
+// pdfjs-dist references browser globals (DOMMatrix, etc.) at import time.
+// Lazy-load it on the client only so the SSR bundle never touches it.
 
-pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null;
+
+async function getPdfjs() {
+  if (typeof window === "undefined") {
+    throw new Error("PDF rendering is only available in the browser");
+  }
+  if (!pdfjsPromise) {
+    pdfjsPromise = (async () => {
+      const pdfjs = await import("pdfjs-dist");
+      const workerMod = await import("pdfjs-dist/build/pdf.worker.mjs?url");
+      pdfjs.GlobalWorkerOptions.workerSrc = workerMod.default;
+      return pdfjs;
+    })();
+  }
+  return pdfjsPromise;
+}
 
 export async function renderPdfThumbnails(
   file: File,
   scale = 0.35,
 ): Promise<string[]> {
+  const pdfjs = await getPdfjs();
   const bytes = await file.arrayBuffer();
   const loadingTask = pdfjs.getDocument({ data: bytes });
   const doc = await loadingTask.promise;
