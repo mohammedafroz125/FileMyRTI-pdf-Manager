@@ -14,7 +14,48 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      rti_documents: {
+        Row: {
+          created_at: string
+          customer_name: string
+          edited_path: string | null
+          final_name: string | null
+          id: string
+          original_name: string
+          original_path: string
+          plan_json: Json | null
+          rti_type: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          customer_name: string
+          edited_path?: string | null
+          final_name?: string | null
+          id?: string
+          original_name: string
+          original_path: string
+          plan_json?: Json | null
+          rti_type: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          customer_name?: string
+          edited_path?: string | null
+          final_name?: string | null
+          id?: string
+          original_name?: string
+          original_path?: string
+          plan_json?: Json | null
+          rti_type?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
