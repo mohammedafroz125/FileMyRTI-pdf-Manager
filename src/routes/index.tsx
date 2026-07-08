@@ -53,8 +53,8 @@ export const Route = createFileRoute("/")({
         content:
           "Internal RTI PDF Manager. Manage pending documents, merge PDFs and images, and track ACK workflow.",
       },
-      { property: "og:title", content: "RTI PDF Manager" },
-      { property: "og:description", content: "Internal RTI document workflow." },
+      { property: "og:title", content: "RTI PDF Manager — Pending Queue & Editor" },
+      { property: "og:description", content: "Internal RTI PDF Manager. Manage pending documents, merge PDFs and images, and track ACK workflow." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],

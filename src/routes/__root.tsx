@@ -77,14 +77,18 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
+      { title: "RTI PDF Manager — Pending Queue & Editor" },
+      { name: "description", content: "Internal RTI PDF Manager. Manage pending documents, merge PDFs and images, and track ACK workflow." },
       { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { property: "og:title", content: "RTI PDF Manager — Pending Queue & Editor" },
+      { property: "og:description", content: "Internal RTI PDF Manager. Manage pending documents, merge PDFs and images, and track ACK workflow." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:title", content: "RTI PDF Manager — Pending Queue & Editor" },
+      { name: "twitter:description", content: "Internal RTI PDF Manager. Manage pending documents, merge PDFs and images, and track ACK workflow." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/c2a57909-4273-4688-b539-5daf60703e95/id-preview-c4c8898a--6d8e3baf-93d1-42ec-91a4-00ab07436a48.lovable.app-1783493706942.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/c2a57909-4273-4688-b539-5daf60703e95/id-preview-c4c8898a--6d8e3baf-93d1-42ec-91a4-00ab07436a48.lovable.app-1783493706942.png" },
     ],
     links: [
       {
