@@ -1,4 +1,5 @@
-import { PDFDocument, type PDFPage } from "pdf-lib";
+import { PDFDocument, StandardFonts, degrees, rgb, type PDFPage } from "pdf-lib";
+import type { TextAnnotation } from "@/lib/rti-storage";
 
 export type MergeItem = {
   id: string;
@@ -8,19 +9,20 @@ export type MergeItem = {
 };
 
 export type PlanEntry =
-  | { kind: "original-page"; pageIndex: number }
-  | { kind: "item"; item: MergeItem };
+  | { entryId: string; kind: "original-page"; originalId: string; pageIndex: number; rotation?: number }
+  | { entryId: string; kind: "item"; item: MergeItem; rotation?: number };
 
 export async function mergeByPlan(
-  original: File | null,
+  originals: Record<string, File>,
   plan: PlanEntry[],
+  annotations: TextAnnotation[] = [],
   onProgress?: (pct: number) => void,
 ): Promise<Blob> {
   if (plan.length === 0) throw new Error("No pages to merge");
 
   const out = await PDFDocument.create();
+  const font = await out.embedFont(StandardFonts.Helvetica);
 
-  // Cache loaded PDFDocuments so multi-page originals/items load once.
   const cache = new Map<string, PDFDocument>();
   const loadPdf = async (key: string, file: File) => {
     let doc = cache.get(key);
@@ -32,23 +34,55 @@ export async function mergeByPlan(
     return doc;
   };
 
+  const anByEntry = new Map<string, TextAnnotation[]>();
+  for (const a of annotations) {
+    const arr = anByEntry.get(a.entryId) ?? [];
+    arr.push(a);
+    anByEntry.set(a.entryId, arr);
+  }
+
+  const applyAnnotations = (page: PDFPage, entryId: string) => {
+    const list = anByEntry.get(entryId);
+    if (!list?.length) return;
+    const { width, height } = page.getSize();
+    for (const a of list) {
+      const text = a.text ?? "";
+      if (!text.trim()) continue;
+      const size = Math.max(6, a.fontSize || 12);
+      const px = a.x * width;
+      // Convert top-origin fraction to PDF bottom-origin baseline.
+      const py = height - a.y * height - size;
+      page.drawText(text, {
+        x: px,
+        y: py,
+        size,
+        font,
+        color: rgb(0, 0, 0),
+        maxWidth: (a.widthFrac || 0.5) * width,
+      });
+    }
+  };
+
   let done = 0;
   for (const entry of plan) {
     if (entry.kind === "original-page") {
-      if (!original) throw new Error("Original PDF missing for page entry");
-      const src = await loadPdf("__original__", original);
+      const file = originals[entry.originalId];
+      if (!file) throw new Error(`Original file missing for id ${entry.originalId}`);
+      const src = await loadPdf(`orig-${entry.originalId}`, file);
       const [page] = await out.copyPages(src, [entry.pageIndex]);
-      out.addPage(page);
+      if (entry.rotation) page.setRotation(degrees(((entry.rotation % 360) + 360) % 360));
+      const added = out.addPage(page);
+      applyAnnotations(added, entry.entryId);
     } else {
       const it = entry.item;
       if (it.kind === "pdf") {
-        try {
-          const src = await loadPdf(it.id, it.file);
-          const pages = await out.copyPages(src, src.getPageIndices());
-          pages.forEach((p: PDFPage) => out.addPage(p));
-        } catch (e) {
-          throw new Error(`Failed to read PDF "${it.name}": ${(e as Error).message}`);
-        }
+        const src = await loadPdf(`item-${it.id}`, it.file);
+        const pages = await out.copyPages(src, src.getPageIndices());
+        pages.forEach((p, i) => {
+          if (entry.rotation) p.setRotation(degrees(((entry.rotation % 360) + 360) % 360));
+          const added = out.addPage(p);
+          if (i === 0) applyAnnotations(added, entry.entryId);
+        });
       } else {
         const bytes = await it.file.arrayBuffer();
         const lower = it.name.toLowerCase();
@@ -57,6 +91,8 @@ export async function mergeByPlan(
           : await out.embedJpg(bytes);
         const page = out.addPage([img.width, img.height]);
         page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+        if (entry.rotation) page.setRotation(degrees(((entry.rotation % 360) + 360) % 360));
+        applyAnnotations(page, entry.entryId);
       }
     }
     done += 1;
@@ -67,23 +103,4 @@ export async function mergeByPlan(
   const ab = new ArrayBuffer(finalBytes.byteLength);
   new Uint8Array(ab).set(finalBytes);
   return new Blob([ab], { type: "application/pdf" });
-}
-
-// Kept for backward compatibility with earlier call site.
-export async function mergeFiles(
-  original: File | null,
-  items: MergeItem[],
-  onProgress?: (pct: number) => void,
-): Promise<Blob> {
-  const plan: PlanEntry[] = [];
-  if (original) {
-    // We don't know the page count here; caller should use mergeByPlan.
-    // Fallback: load once to get indices.
-    const src = await PDFDocument.load(await original.arrayBuffer(), {
-      ignoreEncryption: true,
-    });
-    for (const i of src.getPageIndices()) plan.push({ kind: "original-page", pageIndex: i });
-  }
-  for (const item of items) plan.push({ kind: "item", item });
-  return mergeByPlan(original, plan, onProgress);
 }
