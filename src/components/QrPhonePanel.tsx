@@ -3,13 +3,14 @@ import QRCode from "qrcode";
 import { QrCode, RefreshCw, Copy, Check } from "lucide-react";
 import { createMobileToken, type MobileToken } from "@/lib/rti-storage";
 
-type Props = { docId: string };
+type Props = { docId: string; mobileUploadCount?: number };
 
-export function QrPhonePanel({ docId }: Props) {
+export function QrPhonePanel({ docId, mobileUploadCount = 0 }: Props) {
   const [token, setToken] = useState<MobileToken | null>(null);
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
   const url = token
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/m/upload/${token.token}`
@@ -18,7 +19,7 @@ export function QrPhonePanel({ docId }: Props) {
   const generate = async () => {
     setBusy(true);
     try {
-      const t = await createMobileToken(docId, 120);
+      const t = await createMobileToken(docId, 120); // 2 hours
       setToken(t);
       const u = `${window.location.origin}/m/upload/${t.token}`;
       const png = await QRCode.toDataURL(u, { margin: 1, width: 220 });
@@ -34,6 +35,26 @@ export function QrPhonePanel({ docId }: Props) {
     generate().catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docId]);
+
+  useEffect(() => {
+    if (!token) {
+      setTimeLeft(null);
+      return;
+    }
+    const tick = () => {
+      const ms = new Date(token.expires_at).getTime() - Date.now();
+      if (ms <= 0) {
+        setTimeLeft(0);
+        // Auto refresh when expired
+        generate().catch(console.error);
+      } else {
+        setTimeLeft(Math.floor(ms / 1000));
+      }
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [token]);
 
   const copy = async () => {
     if (!url) return;
@@ -53,7 +74,19 @@ export function QrPhonePanel({ docId }: Props) {
             Scan to upload ACK, envelope, IPO, court fee or images from your phone.
           </p>
         </div>
-        <button
+        <div className="flex items-center gap-3">
+          {mobileUploadCount > 0 ? (
+            <span className="flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-700 shadow-sm transition-all">
+              <Check className="h-3.5 w-3.5" />
+              {mobileUploadCount} {mobileUploadCount === 1 ? "Upload" : "Uploads"} received
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 shadow-sm transition-all">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              Waiting for upload...
+            </span>
+          )}
+          <button
           type="button"
           onClick={generate}
           disabled={busy}
@@ -62,6 +95,7 @@ export function QrPhonePanel({ docId }: Props) {
         >
           <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
         </button>
+      </div>
       </div>
       <div className="flex items-center gap-4">
         <div className="flex h-[220px] w-[220px] shrink-0 items-center justify-center rounded-lg border border-border bg-slate-50">
@@ -77,6 +111,11 @@ export function QrPhonePanel({ docId }: Props) {
               <p className="text-xs text-muted-foreground">Expires</p>
               <p className="text-sm font-medium text-foreground">
                 {new Date(token.expires_at).toLocaleTimeString()}
+                {timeLeft !== null && timeLeft > 0 && (
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    (in {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, "0")})
+                  </span>
+                )}
               </p>
               <p className="mt-3 text-xs text-muted-foreground">Link</p>
               <div className="mt-1 flex items-center gap-2">

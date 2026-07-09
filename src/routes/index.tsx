@@ -25,6 +25,7 @@ import {
   Timer,
   Menu,
 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Dropzone } from "@/components/Dropzone";
 import { PageThumb } from "@/components/PageThumb";
@@ -784,6 +785,7 @@ function Index() {
 
       if (activeDoc.id === MANUAL_PROJECT_ID) {
         setStatus({ kind: "done", message: `Saved ${filename}` });
+        toast.success(`Saved ${filename}`);
         return;
       }
 
@@ -829,8 +831,10 @@ function Index() {
         seenMobilePaths: Array.from(seenMobilePathsRef.current),
       };
       setStatus({ kind: "done", message: `Saved. Status: ${STATUS_TEXT[newStatus]}` });
+      toast.success("Project saved successfully!");
     } catch (err) {
       setStatus({ kind: "error", message: (err as Error).message });
+      toast.error(`Failed to save: ${(err as Error).message}`);
     }
   };
 
