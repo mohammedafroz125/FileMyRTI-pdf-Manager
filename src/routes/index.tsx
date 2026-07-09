@@ -119,6 +119,34 @@ function downloadBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+async function savePdfBlob(blob: Blob, filename: string): Promise<boolean> {
+  const picker = window.showSaveFilePicker;
+  if (typeof picker !== "function") {
+    downloadBlob(blob, filename);
+    return true;
+  }
+
+  try {
+    const handle = await picker.call(window, {
+      suggestedName: filename,
+      types: [
+        {
+          description: "PDF document",
+          accept: { "application/pdf": [".pdf"] },
+        },
+      ],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return true;
+  } catch (err) {
+    if ((err as DOMException).name === "AbortError") return false;
+    downloadBlob(blob, filename);
+    return true;
+  }
+}
+
 function Index() {
   const [activeDoc, setActiveDoc] = useState<RtiDocument | null>(null);
   const [originals, setOriginals] = useState<{ id: string; name: string; file: File }[]>([]);
@@ -190,8 +218,6 @@ function Index() {
     setTimeline([]);
     setStatus({ kind: "idle" });
     seenMobilePathsRef.current = new Set();
-    for (const u of objectUrlsRef.current) URL.revokeObjectURL(u);
-    objectUrlsRef.current = [];
   };
 
   const openDocument = async (doc: RtiDocument) => {
@@ -537,9 +563,8 @@ function Index() {
 
   const openSaveDialog = () => setSaveOpen(true);
 
-  const confirmSave = async (chosen: RtiTypeSelected) => {
+  const confirmSave = async (pdfName: string) => {
     setSaveOpen(false);
-    setRtiType(chosen);
     if (!activeDoc) return;
     setStatus({ kind: "working", pct: 0, label: "Merging pages…" });
     try {
@@ -568,8 +593,16 @@ function Index() {
         setStatus({ kind: "working", pct, label: "Merging pages…" }),
       );
 
-      const filename = buildFilename(activeDoc.customer_name, chosen);
-      downloadBlob(blob, filename);
+      const fallbackName = activeDoc.id === MANUAL_PROJECT_ID
+        ? activeDoc.original_name
+        : buildFilename(activeDoc.customer_name, rtiType);
+      const rawName = pdfName.trim() || fallbackName;
+      const filename = sanitizeFile(/\.pdf$/i.test(rawName) ? rawName : `${rawName}.pdf`);
+      const saved = await savePdfBlob(blob, filename);
+      if (!saved) {
+        setStatus({ kind: "idle" });
+        return;
+      }
 
       if (activeDoc.id === MANUAL_PROJECT_ID) {
         setStatus({ kind: "done", message: `Saved ${filename}` });
@@ -599,7 +632,7 @@ function Index() {
         edited_path: editedPath,
         final_name: filename,
         status: newStatus,
-        rti_type_selected: chosen,
+        rti_type_selected: activeDoc.rti_type_selected ?? rtiType,
       };
       if (newStatus === "completed") {
         patch.deletion_scheduled_at = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
@@ -614,7 +647,7 @@ function Index() {
         itemPaths: nextPaths,
         itemThumbs,
         timeline,
-        rtiType: chosen,
+        rtiType: activeDoc.rti_type_selected ?? rtiType,
         seenMobilePaths: Array.from(seenMobilePathsRef.current),
       };
       setStatus({ kind: "done", message: `Saved. Status: ${STATUS_TEXT[newStatus]}` });
@@ -866,8 +899,12 @@ function Index() {
 
       {saveOpen && activeDoc && (
         <SaveDialog
-          defaultType={rtiType}
-          customerName={activeDoc.customer_name}
+          defaultPdfName=""
+          fallbackPdfName={
+            activeDoc.id === MANUAL_PROJECT_ID
+              ? activeDoc.original_name
+              : buildFilename(activeDoc.customer_name, rtiType)
+          }
           onCancel={() => setSaveOpen(false)}
           onConfirm={confirmSave}
         />
@@ -922,34 +959,31 @@ function useCountdown(target: string) {
 }
 
 function SaveDialog({
-  defaultType,
-  customerName,
+  defaultPdfName,
+  fallbackPdfName,
   onCancel,
   onConfirm,
 }: {
-  defaultType: RtiTypeSelected;
-  customerName: string;
+  defaultPdfName: string;
+  fallbackPdfName: string;
   onCancel: () => void;
-  onConfirm: (t: RtiTypeSelected) => void;
+  onConfirm: (pdfName: string) => void;
 }) {
-  const [type, setType] = useState<RtiTypeSelected>(defaultType);
-  const filename = buildFilename(customerName, type);
+  const [pdfName, setPdfName] = useState(defaultPdfName);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-md rounded-xl border border-border bg-white p-6 shadow-lg">
         <h3 className="text-base font-semibold text-foreground">Save PDF</h3>
-        <p className="mt-1 text-xs text-muted-foreground">Choose the RTI Type. The filename is generated automatically.</p>
-        <label className="mt-4 block text-sm font-medium text-foreground">RTI Type</label>
-        <select
-          value={type}
-          onChange={(e) => setType(e.target.value as RtiTypeSelected)}
+        <p className="mt-1 text-xs text-muted-foreground">Choose an optional PDF name. If empty, the original filename is used.</p>
+        <label className="mt-4 block text-sm font-medium text-foreground">PDF Name</label>
+        <input
+          value={pdfName}
+          onChange={(e) => setPdfName(e.target.value)}
+          placeholder={fallbackPdfName}
           className="mt-1 w-full rounded-lg border border-input bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        >
-          <option value="RTI Application">RTI Application</option>
-          <option value="First Appeal">First Appeal</option>
-        </select>
+        />
         <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-xs text-muted-foreground">
-          Filename: <span className="font-medium text-foreground">{filename}</span>
+          Filename: <span className="font-medium text-foreground">{pdfName.trim() || fallbackPdfName}</span>
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button
@@ -961,7 +995,7 @@ function SaveDialog({
           </button>
           <button
             type="button"
-            onClick={() => onConfirm(type)}
+            onClick={() => onConfirm(pdfName)}
             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
           >
             Generate &amp; Save
