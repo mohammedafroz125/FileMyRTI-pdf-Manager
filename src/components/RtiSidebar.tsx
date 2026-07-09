@@ -10,9 +10,9 @@ type Props = {
 };
 
 const STATUS_META: Record<RtiStatus, { dot: string; label: string; text: string }> = {
-  pending: { dot: "bg-red-500", label: "🔴 Pending", text: "text-red-700" },
-  waiting_ack: { dot: "bg-orange-500", label: "🟠 Waiting for ACK", text: "text-orange-700" },
-  completed: { dot: "bg-green-500", label: "🟢 Completed", text: "text-green-700" },
+  pending: { dot: "bg-red-500", label: "Pending", text: "text-red-700" },
+  waiting_ack: { dot: "bg-orange-500", label: "Waiting for ACK", text: "text-orange-700" },
+  completed: { dot: "bg-green-500", label: "Completed", text: "text-green-700" },
 };
 
 export function RtiSidebar({ activeId, onSelect }: Props) {
@@ -49,7 +49,7 @@ export function RtiSidebar({ activeId, onSelect }: Props) {
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold text-foreground">Pending Queue</h2>
-          <p className="text-xs text-muted-foreground">{docs.length} document{docs.length === 1 ? "" : "s"}</p>
+          <p className="text-xs text-muted-foreground">{docs.length} project{docs.length === 1 ? "" : "s"}</p>
         </div>
         <button
           type="button"
@@ -71,7 +71,7 @@ export function RtiSidebar({ activeId, onSelect }: Props) {
       <div className="mt-3 flex-1 overflow-y-auto px-2 pb-4">
         {docs.length === 0 && !loading && (
           <p className="mt-6 px-3 text-center text-xs text-muted-foreground">
-            No documents yet. Use Admin Upload to add one.
+            No projects yet. Use Admin Upload to add one.
           </p>
         )}
         <ul className="flex flex-col gap-1">
@@ -91,7 +91,9 @@ export function RtiSidebar({ activeId, onSelect }: Props) {
                     <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-foreground">{d.customer_name}</p>
-                      <p className="truncate text-xs text-muted-foreground">{d.rti_type}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {d.rti_type_selected ?? "RTI"}
+                      </p>
                       <div className="mt-1 flex items-center gap-1.5">
                         <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
                         <span className={`text-[11px] font-medium ${meta.text}`}>{meta.label}</span>
