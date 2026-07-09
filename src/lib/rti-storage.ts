@@ -244,11 +244,17 @@ export type MobileToken = {
 };
 
 export async function createMobileToken(docId: string, ttlMinutes = 120): Promise<MobileToken> {
+  const expires_at = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
+  
+  if (docId === "manual-edit") {
+    const token = "MANUAL-" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    return { id: "manual", document_id: docId, token, expires_at, created_at: new Date().toISOString() };
+  }
+
   // Deactivate any existing active tokens for this doc (delete for simplicity).
   await supabase.from("rti_mobile_tokens").delete().eq("document_id", docId);
   const token =
     crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8);
-  const expires_at = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
   const { data, error } = await supabase
     .from("rti_mobile_tokens")
     .insert({ document_id: docId, token, expires_at })
@@ -259,6 +265,15 @@ export async function createMobileToken(docId: string, ttlMinutes = 120): Promis
 }
 
 export async function getTokenInfo(token: string): Promise<MobileToken | null> {
+  if (token.startsWith("MANUAL-")) {
+    return {
+      id: "manual",
+      document_id: "manual-edit",
+      token,
+      expires_at: new Date(Date.now() + 120 * 60_000).toISOString(),
+      created_at: new Date().toISOString(),
+    };
+  }
   const { data } = await supabase
     .from("rti_mobile_tokens")
     .select("*")
@@ -288,10 +303,19 @@ export async function uploadMobileFile(
   // Log an "upload event" as a mobile_uploads row via lightweight approach:
   // reuse rti_mobile_tokens? no. Just return path — the desktop realtime channel
   // picks up new storage objects via the token table's updated_at bump.
-  await supabase
-    .from("rti_mobile_tokens")
-    .update({ expires_at: new Date(Date.now() + 15 * 60_000).toISOString() })
-    .eq("token", token);
+  if (token.startsWith("MANUAL-")) {
+    // For manual edit, we bypass the table and broadcast directly via realtime
+    supabase.channel(`rti_mobile_tokens_${docId}`).send({
+      type: "broadcast",
+      event: "manual_upload",
+      payload: { path },
+    });
+  } else {
+    await supabase
+      .from("rti_mobile_tokens")
+      .update({ expires_at: new Date(Date.now() + 15 * 60_000).toISOString() })
+      .eq("token", token);
+  }
   return path;
 }
 

@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { Plus, UploadCloud, CheckCircle2, AlertCircle, Loader2, X } from "lucide-react";
+import { Plus, UploadCloud, CheckCircle2, AlertCircle, Loader2, X, ArrowLeft } from "lucide-react";
 import { createProjectWithOriginals } from "@/lib/rti-storage";
 
 export const Route = createFileRoute("/admin")({
@@ -79,6 +79,14 @@ function AdminUpload() {
   return (
     <div className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-7xl">
+        <div className="mb-6">
+          <Link
+            to="/"
+            className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm border border-border hover:bg-slate-50 transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" /> Back to Dashboard
+          </Link>
+        </div>
         <header className="mb-10 text-center">
           <h1 className="text-2xl font-bold text-foreground">Admin Upload</h1>
           <p className="mt-2 text-sm text-muted-foreground">

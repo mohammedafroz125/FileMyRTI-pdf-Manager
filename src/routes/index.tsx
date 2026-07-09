@@ -361,15 +361,9 @@ function Index() {
     resetLocalState();
     
     const pdfs: File[] = [];
-    for (const f of files) {
+    for (const f of files || []) {
       const processed = await processFileToPdf(f);
       if (processed) pdfs.push(processed);
-    }
-
-    if (!pdfs.length) {
-      setStatus({ kind: "error", message: "No supported files found." });
-      setLoadingDoc(false);
-      return;
     }
 
     const manualDoc: RtiDocument = {
@@ -378,7 +372,7 @@ function Index() {
       rti_type: "RTI",
       status: "pending",
       original_path: "",
-      original_name: pdfs[0].name,
+      original_name: pdfs[0]?.name || "manual-edit.pdf",
       edited_path: null,
       final_name: null,
       plan_json: null,
@@ -388,7 +382,7 @@ function Index() {
       updated_at: new Date().toISOString(),
     };
 
-    setManualPdfName(pdfs[0].name.replace(/\.pdf$/i, ""));
+    setManualPdfName(pdfs[0]?.name.replace(/\.pdf$/i, "") || "manual-edit");
 
     try {
       const loadedOriginals: { id: string; name: string; file: File }[] = [];
@@ -487,6 +481,13 @@ function Index() {
         () => {
           void tick();
         },
+      )
+      .on(
+        "broadcast",
+        { event: "manual_upload" },
+        () => {
+          void tick();
+        }
       )
       .subscribe();
     const iv = window.setInterval(tick, 4000);
@@ -776,7 +777,7 @@ function Index() {
 
   return (
     <div className="flex min-h-screen bg-background">
-      <RtiSidebar activeId={activeDoc?.id ?? null} onSelect={openDocument} onDelete={deleteProject} />
+      <RtiSidebar activeId={activeDoc?.id ?? null} onSelect={openDocument} onDelete={deleteProject} onOpenManualEdit={() => openManualProject([])} />
 
       <input
         ref={replaceInputRef}

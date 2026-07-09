@@ -8,6 +8,7 @@ type Props = {
   activeId?: string | null;
   onSelect: (doc: RtiDocument) => void;
   onDelete: (doc: RtiDocument) => Promise<void>;
+  onOpenManualEdit: () => void;
 };
 
 const STATUS_META: Record<RtiStatus, { dot: string; label: string; text: string }> = {
@@ -16,7 +17,7 @@ const STATUS_META: Record<RtiStatus, { dot: string; label: string; text: string 
   completed: { dot: "bg-green-500", label: "Completed", text: "text-green-700" },
 };
 
-export function RtiSidebar({ activeId, onSelect, onDelete }: Props) {
+export function RtiSidebar({ activeId, onSelect, onDelete, onOpenManualEdit }: Props) {
   const [docs, setDocs] = useState<RtiDocument[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -62,12 +63,21 @@ export function RtiSidebar({ activeId, onSelect, onDelete }: Props) {
         </button>
       </div>
 
-      <Link
-        to="/admin"
-        className="mx-3 mt-3 inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
-      >
-        <Plus className="h-4 w-4" /> Admin Upload
-      </Link>
+      <div className="mx-3 mt-3 flex flex-col gap-2">
+        <Link
+          to="/admin"
+          className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+        >
+          <Plus className="h-4 w-4" /> Admin Upload
+        </Link>
+        <button
+          type="button"
+          onClick={onOpenManualEdit}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-white px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-slate-50"
+        >
+          <FileText className="h-4 w-4" /> Manual Edit
+        </button>
+      </div>
 
       <div className="mt-3 flex-1 overflow-y-auto px-2 pb-4">
         {docs.length === 0 && !loading && (
