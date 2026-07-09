@@ -42,6 +42,8 @@ import {
   type SavedPlanItem,
   type SavedTimelineEntry,
 } from "@/lib/rti-storage";
+import { convertWordToPdfBlob } from "@/lib/word-to-pdf";
+import { jsPDF } from "jspdf";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -87,11 +89,13 @@ type ProjectCacheEntry = {
   seenMobilePaths: string[];
 };
 
-function classify(file: File): "pdf" | "image" | null {
+function classify(file: File): "pdf" | "image" | "word" | null {
   const n = file.name.toLowerCase();
   if (n.endsWith(".pdf") || file.type === "application/pdf") return "pdf";
-  if (/\.(jpe?g|png)$/.test(n) || file.type === "image/jpeg" || file.type === "image/png")
+  if (/\.(jpe?g|png|webp)$/.test(n) || file.type.startsWith("image/"))
     return "image";
+  if (/\.(docx?)$/.test(n) || file.type.includes("word") || file.type.includes("msword"))
+    return "word";
   return null;
 }
 
@@ -120,7 +124,7 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 async function savePdfBlob(blob: Blob, filename: string): Promise<boolean> {
-  const picker = window.showSaveFilePicker;
+  const picker = (window as any).showSaveFilePicker;
   if (typeof picker !== "function") {
     downloadBlob(blob, filename);
     return true;
@@ -159,6 +163,7 @@ function Index() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [loadingDoc, setLoadingDoc] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
+  const [manualPdfName, setManualPdfName] = useState("");
   const objectUrlsRef = useRef<string[]>([]);
   const seenMobilePathsRef = useRef<Set<string>>(new Set());
   const projectCacheRef = useRef<Record<string, ProjectCacheEntry>>({});
@@ -312,18 +317,60 @@ function Index() {
     }
   };
 
+  const processFileToPdf = async (file: File): Promise<File | null> => {
+    const kind = classify(file);
+    if (kind === "pdf") return file;
+    if (kind === "word") {
+      try {
+        const blob = await convertWordToPdfBlob(file);
+        return new File([blob], file.name.replace(/\.docx?$/i, ".pdf"), { type: "application/pdf" });
+      } catch (e) {
+        console.error("Word conversion failed", e);
+        return null;
+      }
+    }
+    if (kind === "image") {
+      try {
+        const pdf = new jsPDF();
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.src = url;
+        await new Promise((r) => { img.onload = r; });
+        const imgProps = pdf.getImageProperties(img);
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+        pdf.addImage(img, "JPEG", 0, 0, pdfWidth, pdfHeight);
+        return new File([pdf.output("blob")], file.name + ".pdf", { type: "application/pdf" });
+      } catch (e) {
+        console.error("Image conversion failed", e);
+        return null;
+      }
+    }
+    return null;
+  };
+
   const openManualProject = async (files: File[]) => {
-    const pdfs = files.filter(
-      (file) => file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf",
-    );
-    if (!pdfs.length) {
-      setStatus({ kind: "error", message: "Manual edit mode accepts PDF files only." });
-      return;
+    if (activeDoc?.id === MANUAL_PROJECT_ID) {
+      if (!confirm("Discard current Manual Edit?\n\nPress OK to Continue and clear the workspace, or Cancel.")) {
+        return;
+      }
     }
 
     setLoadingDoc(true);
-    setStatus({ kind: "working", pct: 0, label: "Loading manual project…" });
+    setStatus({ kind: "working", pct: 0, label: "Processing files…" });
     resetLocalState();
+    
+    const pdfs: File[] = [];
+    for (const f of files) {
+      const processed = await processFileToPdf(f);
+      if (processed) pdfs.push(processed);
+    }
+
+    if (!pdfs.length) {
+      setStatus({ kind: "error", message: "No supported files found." });
+      setLoadingDoc(false);
+      return;
+    }
 
     const manualDoc: RtiDocument = {
       id: MANUAL_PROJECT_ID,
@@ -340,6 +387,8 @@ function Index() {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
+
+    setManualPdfName(pdfs[0].name.replace(/\.pdf$/i, ""));
 
     try {
       const loadedOriginals: { id: string; name: string; file: File }[] = [];
@@ -470,7 +519,8 @@ function Index() {
     cacheCurrentProject();
   }, [activeDoc, originals, originalThumbs, items, itemPaths, itemThumbs, timeline, rtiType, loadingDoc]);
 
-  const addFiles = (files: File[]) => {
+  const addFiles = async (files: File[]) => {
+    setStatus({ kind: "working", pct: 0, label: "Processing files…" });
     const next: MergeItem[] = [];
     const rejected: string[] = [];
     for (const f of files) {
@@ -479,7 +529,21 @@ function Index() {
         rejected.push(f.name);
         continue;
       }
-      next.push({ id: `${f.name}-${f.size}-${crypto.randomUUID()}`, name: f.name, kind, file: f });
+      
+      let itemFile = f;
+      let finalKind: "pdf" | "image" = kind === "word" ? "pdf" : kind;
+      
+      if (kind === "word") {
+        const processed = await processFileToPdf(f);
+        if (processed) {
+          itemFile = processed;
+        } else {
+          rejected.push(f.name);
+          continue;
+        }
+      }
+
+      next.push({ id: `${itemFile.name}-${itemFile.size}-${crypto.randomUUID()}`, name: itemFile.name, kind: finalKind, file: itemFile });
     }
     if (!next.length) {
       if (rejected.length) setStatus({ kind: "error", message: `Skipped: ${rejected.join(", ")}` });
@@ -528,9 +592,25 @@ function Index() {
     const targetId = replaceForEntryRef.current;
     replaceForEntryRef.current = null;
     if (!fs || !fs[0] || !targetId) return;
-    const f = fs[0];
-    const kind = classify(f);
-    if (!kind) return;
+    
+    setStatus({ kind: "working", pct: 0, label: "Processing replacement…" });
+    let f = fs[0];
+    let kind = classify(f);
+    if (!kind) {
+      setStatus({ kind: "idle" });
+      return;
+    }
+
+    if (kind === "word") {
+      const processed = await processFileToPdf(f);
+      if (!processed) {
+        setStatus({ kind: "idle" });
+        return;
+      }
+      f = processed;
+      kind = "pdf";
+    }
+
     const it: MergeItem = { id: `${f.name}-${f.size}-${crypto.randomUUID()}`, name: f.name, kind, file: f };
     setItems((prev) => [...prev, it]);
     if (kind === "image") {
@@ -561,7 +641,13 @@ function Index() {
     });
   };
 
-  const openSaveDialog = () => setSaveOpen(true);
+  const openSaveDialog = () => {
+    if (isManualProject) {
+      confirmSave(manualPdfName);
+    } else {
+      setSaveOpen(true);
+    }
+  };
 
   const confirmSave = async (pdfName: string) => {
     setSaveOpen(false);
@@ -729,9 +815,9 @@ function Index() {
               <div className="mt-5 text-left">
                 <Dropzone
                   label="Start manual edit"
-                  hint="Drop one or more PDFs to open them directly in the editor"
+                  hint="Drop PDFs, Word docs, or Images"
                   multiple
-                  accept="application/pdf,.pdf"
+                  accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   onFiles={openManualProject}
                 />
               </div>
@@ -742,13 +828,15 @@ function Index() {
                 <div className="flex-1">
                   <p className="text-sm font-semibold text-foreground">{activeDoc.customer_name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {originals.length} original PDF{originals.length === 1 ? "" : "s"} ·{" "}
-                    {activeDoc.rti_type_selected ?? "RTI type not chosen yet"}
+                    {originals.length} original file{originals.length === 1 ? "" : "s"}
+                    {!isManualProject && ` · ${activeDoc.rti_type_selected ?? "RTI type not chosen yet"}`}
                   </p>
                 </div>
-                <span className="rounded-full bg-white px-3 py-1 text-xs font-medium shadow-sm">
-                  {STATUS_TEXT[activeDoc.status]}
-                </span>
+                {!isManualProject && (
+                  <span className="rounded-full bg-white px-3 py-1 text-xs font-medium shadow-sm">
+                    {STATUS_TEXT[activeDoc.status]}
+                  </span>
+                )}
               </div>
 
               {!isManualProject && activeDoc.status === "completed" && activeDoc.deletion_scheduled_at && (
@@ -759,22 +847,20 @@ function Index() {
                 />
               )}
 
-              {!isManualProject && (
-                <div className="mb-6">
-                  <QrPhonePanel docId={activeDoc.id} />
-                </div>
-              )}
+              <div className="mb-6">
+                <QrPhonePanel docId={activeDoc.id} />
+              </div>
 
               <section className="rounded-xl border border-border bg-white p-5 shadow-sm">
                 <h2 className="mb-1 text-sm font-semibold text-foreground">Add more files</h2>
                 <p className="mb-3 text-xs text-muted-foreground">
-                  Add PDFs or images (JPG, PNG). Drag thumbnails below to reorder / interleave.
+                  Add PDFs, Images, or Word docs. Drag thumbnails below to reorder / interleave.
                 </p>
                 <Dropzone
                   label="Drop files here or click to browse"
-                  hint="Multiple .pdf, .jpg, .jpeg, .png"
+                  hint="Multiple .pdf, .jpg, .png, .docx"
                   multiple
-                  accept="application/pdf,.pdf,image/jpeg,image/png,.jpg,.jpeg,.png"
+                  accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   onFiles={addFiles}
                 />
               </section>
@@ -849,7 +935,22 @@ function Index() {
               </section>
 
               <section className="mt-6 rounded-xl border border-border bg-white p-5 shadow-sm">
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+                  {isManualProject && (
+                    <div className="flex-1">
+                      <label className="mb-1 block text-xs font-semibold text-foreground">
+                        PDF Name
+                      </label>
+                      <input
+                        type="text"
+                        value={manualPdfName}
+                        onChange={(e) => setManualPdfName(e.target.value)}
+                        placeholder="Filename for generated PDF"
+                        className="w-full max-w-sm rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                  )}
+                  
                   <button
                     type="button"
                     onClick={openSaveDialog}

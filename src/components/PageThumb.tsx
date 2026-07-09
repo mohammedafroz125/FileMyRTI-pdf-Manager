@@ -15,7 +15,9 @@ type Props = {
   onReplace?: () => void;
 };
 
-export function PageThumb({
+import React from "react";
+
+export const PageThumb = React.memo(function PageThumb({
   id,
   label,
   sublabel,
@@ -103,7 +105,7 @@ export function PageThumb({
       </div>
     </div>
   );
-}
+});
 
 function IconBtn({
   children,

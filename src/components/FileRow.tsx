@@ -12,7 +12,9 @@ type Props = {
   onDelete: () => void;
 };
 
-export function FileRow({ item, index, total, onUp, onDown, onDelete }: Props) {
+import React from "react";
+
+export const FileRow = React.memo(function FileRow({ item, index, total, onUp, onDown, onDelete }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
   });
@@ -77,4 +79,4 @@ export function FileRow({ item, index, total, onUp, onDown, onDelete }: Props) {
       </div>
     </div>
   );
-}
+});
