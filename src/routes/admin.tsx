@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { Plus, UploadCloud, CheckCircle2, AlertCircle, Loader2, X } from "lucide-react";
+import { Plus, UploadCloud, CheckCircle2, AlertCircle, Loader2, X, ArrowLeft } from "lucide-react";
 import { createProjectWithOriginals } from "@/lib/rti-storage";
 
 export const Route = createFileRoute("/admin")({
@@ -76,14 +76,26 @@ function AdminUpload() {
     }
   };
 
+  const navigate = useNavigate();
+
   return (
     <div className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-7xl">
-        <header className="mb-10 text-center">
-          <h1 className="text-2xl font-bold text-foreground">Admin Upload</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Create new RTI projects. Each card creates a separate project in the pending queue.
-          </p>
+        <header className="mb-10">
+          <button
+            type="button"
+            onClick={() => navigate({ to: "/" })}
+            className="mb-6 inline-flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:bg-accent"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Back to RTI PDF Manager
+          </button>
+          <div className="text-center">
+            <h1 className="text-2xl font-bold text-foreground">Admin Upload</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Create new RTI projects. Each card creates a separate project in the pending queue.
+            </p>
+          </div>
         </header>
 
         <div className="flex flex-wrap justify-center gap-6">

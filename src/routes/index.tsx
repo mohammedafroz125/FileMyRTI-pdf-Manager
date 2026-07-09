@@ -171,6 +171,8 @@ function Index() {
   const replaceInputRef = useRef<HTMLInputElement>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  // Stable session ID for Manual Edit QR — persists for the lifetime of the component.
+  const manualSessionIdRef = useRef<string>(crypto.randomUUID());
 
   const originalsById = useMemo(() => {
     const m = new Map<string, { name: string; file: File }>();
@@ -356,6 +358,33 @@ function Index() {
       }
     }
 
+    // Rotate the session ID so the QR panel generates a fresh token.
+    manualSessionIdRef.current = crypto.randomUUID();
+
+    // If no files provided, just open an empty workspace immediately.
+    if (files.length === 0) {
+      resetLocalState();
+      const manualDoc: RtiDocument = {
+        id: MANUAL_PROJECT_ID,
+        customer_name: "Manual Edit",
+        rti_type: "RTI",
+        status: "pending",
+        original_path: "",
+        original_name: "manual-edit.pdf",
+        edited_path: null,
+        final_name: null,
+        plan_json: null,
+        rti_type_selected: "RTI Application",
+        deletion_scheduled_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setManualPdfName("");
+      setActiveDoc(manualDoc);
+      setRtiType("RTI Application");
+      return;
+    }
+
     setLoadingDoc(true);
     setStatus({ kind: "working", pct: 0, label: "Processing files…" });
     resetLocalState();
@@ -496,6 +525,66 @@ function Index() {
       window.clearInterval(iv);
     };
   }, [activeDoc]);
+
+  // Poll mobile uploads for Manual Edit session (uses manualSessionIdRef, not the DB doc ID).
+  useEffect(() => {
+    if (!isManualProject) return;
+    const sessionId = manualSessionIdRef.current;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const { data } = await (await import("@/integrations/supabase/client")).supabase.storage
+          .from("rti-files")
+          .list(`${sessionId}/items`, { limit: 1000, sortBy: { column: "created_at", order: "desc" } });
+        if (!data || cancelled) return;
+        const fresh = data.filter(
+          (f) => f.name.includes("-mobile-") && !seenMobilePathsRef.current.has(`${sessionId}/items/${f.name}`),
+        );
+        for (const f of fresh) {
+          const path = `${sessionId}/items/${f.name}`;
+          seenMobilePathsRef.current.add(path);
+          const lower = f.name.toLowerCase();
+          const isPdf = lower.endsWith(".pdf");
+          const kind: "pdf" | "image" = isPdf ? "pdf" : "image";
+          const mime = isPdf ? "application/pdf" : lower.endsWith(".png") ? "image/png" : "image/jpeg";
+          const cleanName = f.name.replace(/^[a-f0-9-]+-mobile-/, "");
+          const { downloadFromPath } = await import("@/lib/rti-storage");
+          const file = await downloadFromPath(path, cleanName, mime);
+          const it: MergeItem = { id: `mobile-${crypto.randomUUID()}`, name: cleanName, kind, file };
+          if (cancelled) return;
+          setItems((prev) => [...prev, it]);
+          setTimeline((prev) => [...prev, { id: `entry-${crypto.randomUUID()}`, type: "item", itemId: it.id }]);
+          if (kind === "image") {
+            const url = URL.createObjectURL(file);
+            objectUrlsRef.current.push(url);
+            setItemThumbs((prev) => ({ ...prev, [it.id]: url }));
+          } else {
+            setItemThumbs((prev) => ({ ...prev, [it.id]: null }));
+            renderPdfFirstThumbnail(file)
+              .then((t) => setItemThumbs((prev) => ({ ...prev, [it.id]: t })))
+              .catch(() => {});
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    // Listen for token table updates (the mobile upload page bumps expires_at after each upload).
+    const mobileChannel = supabase
+      .channel(`manual_mobile_${sessionId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rti_mobile_tokens", filter: `document_id=eq.${sessionId}` },
+        () => { void tick(); },
+      )
+      .subscribe();
+    const iv = window.setInterval(tick, 4000);
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(mobileChannel);
+      window.clearInterval(iv);
+    };
+  }, [isManualProject, activeDoc?.id]);
 
   // Live-updated status via realtime
   useEffect(() => {
@@ -795,12 +884,20 @@ function Index() {
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white">
               <FileText className="h-5 w-5" />
             </div>
-            <div>
+            <div className="flex-1">
               <h1 className="text-lg font-semibold text-foreground">RTI PDF Manager</h1>
               <p className="text-xs text-muted-foreground">
-                Internal tool · Merge PDFs & images · ACK workflow
+                Internal tool · Merge PDFs &amp; images · ACK workflow
               </p>
             </div>
+            <button
+              type="button"
+              onClick={() => openManualProject([])}
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:bg-accent"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Manual Edit
+            </button>
           </div>
         </header>
 
@@ -848,7 +945,10 @@ function Index() {
               )}
 
               <div className="mb-6">
-                <QrPhonePanel docId={activeDoc.id} />
+                <QrPhonePanel
+                  docId={activeDoc.id}
+                  sessionId={isManualProject ? manualSessionIdRef.current : undefined}
+                />
               </div>
 
               <section className="rounded-xl border border-border bg-white p-5 shadow-sm">

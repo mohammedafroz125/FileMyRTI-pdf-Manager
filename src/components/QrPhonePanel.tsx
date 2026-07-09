@@ -1,15 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { QrCode, RefreshCw, Copy, Check } from "lucide-react";
+import { QrCode, RefreshCw, Copy, Check, AlertCircle } from "lucide-react";
 import { createMobileToken, type MobileToken } from "@/lib/rti-storage";
 
-type Props = { docId: string };
+/** Pass sessionId to override the DB document_id used for the token.
+ *  This is used by Manual Edit, which uses a local-only session UUID
+ *  so the token can be created without a real rti_documents row. */
+type Props = { docId: string; sessionId?: string };
 
-export function QrPhonePanel({ docId }: Props) {
+export function QrPhonePanel({ docId, sessionId }: Props) {
+  const effectiveId = sessionId ?? docId;
   const [token, setToken] = useState<MobileToken | null>(null);
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+  // Track whether we have already generated for the current effectiveId.
+  const lastGeneratedFor = useRef<string | null>(null);
 
   const url = token
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/m/upload/${token.token}`
@@ -17,12 +24,16 @@ export function QrPhonePanel({ docId }: Props) {
 
   const generate = async () => {
     setBusy(true);
+    setGenError(null);
     try {
-      const t = await createMobileToken(docId, 120);
+      const t = await createMobileToken(effectiveId, 120);
       setToken(t);
+      lastGeneratedFor.current = effectiveId;
       const u = `${window.location.origin}/m/upload/${t.token}`;
       const png = await QRCode.toDataURL(u, { margin: 1, width: 220 });
       setDataUrl(png);
+    } catch (err) {
+      setGenError((err as Error).message ?? "Failed to generate QR");
     } finally {
       setBusy(false);
     }
@@ -31,9 +42,11 @@ export function QrPhonePanel({ docId }: Props) {
   useEffect(() => {
     setToken(null);
     setDataUrl(null);
-    generate().catch(console.error);
+    setGenError(null);
+    lastGeneratedFor.current = null;
+    void generate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docId]);
+  }, [effectiveId]);
 
   const copy = async () => {
     if (!url) return;
@@ -67,8 +80,24 @@ export function QrPhonePanel({ docId }: Props) {
         <div className="flex h-[220px] w-[220px] shrink-0 items-center justify-center rounded-lg border border-border bg-slate-50">
           {dataUrl ? (
             <img src={dataUrl} alt="QR code" className="h-full w-full" />
+          ) : genError ? (
+            <div className="flex flex-col items-center gap-2 px-4 text-center">
+              <AlertCircle className="h-6 w-6 text-red-500" />
+              <p className="text-xs text-red-600">{genError}</p>
+              <button
+                type="button"
+                onClick={generate}
+                disabled={busy}
+                className="mt-1 rounded-md bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+              >
+                Retry
+              </button>
+            </div>
           ) : (
-            <span className="text-xs text-muted-foreground">Generating…</span>
+            <div className="flex items-center gap-1.5">
+              <RefreshCw className="h-4 w-4 animate-spin text-blue-500" />
+              <span className="text-xs text-muted-foreground">Generating…</span>
+            </div>
           )}
         </div>
         <div className="min-w-0 flex-1">
