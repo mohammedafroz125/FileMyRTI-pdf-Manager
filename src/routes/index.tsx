@@ -176,49 +176,6 @@ function Index() {
   const objectUrlsRef = useRef<string[]>([]);
   const projectCacheRef = useRef<Record<string, ProjectCacheEntry>>({});
   const cancelWorkRef = useRef(false);
-
-  useEffect(() => {
-    if (!isManualProject) return;
-
-    const onPaste = async (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      const files: File[] = [];
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].kind === "file") {
-          const file = items[i].getAsFile();
-          if (file) files.push(file);
-        }
-      }
-      if (files.length > 0) {
-        e.preventDefault();
-        addFiles(files);
-      }
-    };
-
-    const onDragOver = (e: DragEvent) => {
-      // Allow drop anywhere
-      e.preventDefault();
-    };
-
-    const onDrop = async (e: DragEvent) => {
-      const files = e.dataTransfer?.files;
-      if (files && files.length > 0) {
-        e.preventDefault();
-        addFiles(Array.from(files));
-      }
-    };
-
-    window.addEventListener("paste", onPaste);
-    window.addEventListener("dragover", onDragOver);
-    window.addEventListener("drop", onDrop);
-    
-    return () => {
-      window.removeEventListener("paste", onPaste);
-      window.removeEventListener("dragover", onDragOver);
-      window.removeEventListener("drop", onDrop);
-    };
-  }, [isManualProject]);
   const replaceForEntryRef = useRef<string | null>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
 
@@ -665,6 +622,50 @@ function Index() {
     }
     if (!cancelWorkRef.current) setStatus({ kind: "idle" });
   };
+
+  // Global paste and drag-and-drop support for Manual Edit
+  // Must be placed AFTER addFiles is defined to avoid ReferenceError
+  useEffect(() => {
+    if (!isManualProject) return;
+
+    const onPaste = async (e: ClipboardEvent) => {
+      const clipItems = e.clipboardData?.items;
+      if (!clipItems) return;
+      const files: File[] = [];
+      for (let i = 0; i < clipItems.length; i++) {
+        if (clipItems[i].kind === "file") {
+          const file = clipItems[i].getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        addFiles(files);
+      }
+    };
+
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const onDrop = async (e: DragEvent) => {
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        e.preventDefault();
+        addFiles(Array.from(files));
+      }
+    };
+
+    window.addEventListener("paste", onPaste);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+
+    return () => {
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [isManualProject, addFiles]);
 
   const removeEntry = (entryId: string) => {
     setTimeline((prev) => prev.filter((e) => e.id !== entryId));
