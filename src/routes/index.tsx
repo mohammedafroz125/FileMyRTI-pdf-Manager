@@ -42,8 +42,6 @@ import {
   type SavedPlanItem,
   type SavedTimelineEntry,
 } from "@/lib/rti-storage";
-import { convertWordToPdfBlob } from "@/lib/word-to-pdf";
-import { jsPDF } from "jspdf";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -324,6 +322,7 @@ function Index() {
     if (kind === "pdf") return file;
     if (kind === "word") {
       try {
+        const { convertWordToPdfBlob } = await import("@/lib/word-to-pdf");
         const blob = await convertWordToPdfBlob(file);
         return new File([blob], file.name.replace(/\.docx?$/i, ".pdf"), { type: "application/pdf" });
       } catch (e) {
@@ -333,6 +332,7 @@ function Index() {
     }
     if (kind === "image") {
       try {
+        const { jsPDF } = await import("jspdf");
         const pdf = new jsPDF();
         const url = URL.createObjectURL(file);
         const img = new Image();
@@ -342,6 +342,7 @@ function Index() {
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
         pdf.addImage(img, "JPEG", 0, 0, pdfWidth, pdfHeight);
+        URL.revokeObjectURL(url);
         return new File([pdf.output("blob")], file.name + ".pdf", { type: "application/pdf" });
       } catch (e) {
         console.error("Image conversion failed", e);
@@ -533,7 +534,7 @@ function Index() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const { data } = await (await import("@/integrations/supabase/client")).supabase.storage
+        const { data } = await supabase.storage
           .from("rti-files")
           .list(`${sessionId}/items`, { limit: 1000, sortBy: { column: "created_at", order: "desc" } });
         if (!data || cancelled) return;
@@ -548,7 +549,6 @@ function Index() {
           const kind: "pdf" | "image" = isPdf ? "pdf" : "image";
           const mime = isPdf ? "application/pdf" : lower.endsWith(".png") ? "image/png" : "image/jpeg";
           const cleanName = f.name.replace(/^[a-f0-9-]+-mobile-/, "");
-          const { downloadFromPath } = await import("@/lib/rti-storage");
           const file = await downloadFromPath(path, cleanName, mime);
           const it: MergeItem = { id: `mobile-${crypto.randomUUID()}`, name: cleanName, kind, file };
           if (cancelled) return;
