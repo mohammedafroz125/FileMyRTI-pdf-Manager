@@ -11,17 +11,25 @@ import {
 import { SortableContext, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import {
   FileText,
+  Trash2,
+  Download,
   Save,
-  Sparkles,
+  Plus,
+  RefreshCw,
+  MoreVertical,
   CheckCircle2,
   AlertCircle,
-  Trash2,
-  Timer,
+  FileSearch,
+  Sparkles,
   Ban,
+  Timer,
+  Menu,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Dropzone } from "@/components/Dropzone";
 import { PageThumb } from "@/components/PageThumb";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 import { RtiSidebar } from "@/components/RtiSidebar";
 import { QrPhonePanel } from "@/components/QrPhonePanel";
 import { mergeByPlan, type MergeItem, type PlanEntry } from "@/lib/pdf-merge";
@@ -165,8 +173,51 @@ function Index() {
   const [saveOpen, setSaveOpen] = useState(false);
   const [manualPdfName, setManualPdfName] = useState("");
   const objectUrlsRef = useRef<string[]>([]);
-  const seenMobilePathsRef = useRef<Set<string>>(new Set());
   const projectCacheRef = useRef<Record<string, ProjectCacheEntry>>({});
+  const cancelWorkRef = useRef(false);
+
+  useEffect(() => {
+    if (!isManualProject) return;
+
+    const onPaste = async (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === "file") {
+          const file = items[i].getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        addFiles(files);
+      }
+    };
+
+    const onDragOver = (e: DragEvent) => {
+      // Allow drop anywhere
+      e.preventDefault();
+    };
+
+    const onDrop = async (e: DragEvent) => {
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        e.preventDefault();
+        addFiles(Array.from(files));
+      }
+    };
+
+    window.addEventListener("paste", onPaste);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    
+    return () => {
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [isManualProject]);
   const replaceForEntryRef = useRef<string | null>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
 
@@ -187,7 +238,7 @@ function Index() {
   const isManualProject = activeDoc?.id === MANUAL_PROJECT_ID;
 
   const cacheCurrentProject = () => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID || loadingDoc) return;
+    if (!activeDoc || loadingDoc) return;
     projectCacheRef.current[activeDoc.id] = {
       activeDoc,
       originals,
@@ -350,20 +401,39 @@ function Index() {
   };
 
   const openManualProject = async (files: File[]) => {
-    if (activeDoc?.id === MANUAL_PROJECT_ID) {
+    cacheCurrentProject();
+
+    if (activeDoc?.id === MANUAL_PROJECT_ID && files.length === 0) {
       if (!confirm("Discard current Manual Edit?\n\nPress OK to Continue and clear the workspace, or Cancel.")) {
         return;
       }
+    } else if (files.length === 0 && projectCacheRef.current[MANUAL_PROJECT_ID]) {
+      // If no files dropped and we have a cached manual edit, restore it quietly
+      setLoadingDoc(true);
+      setStatus({ kind: "working", pct: 0, label: "Restoring manual edit…" });
+      resetLocalState();
+      restoreCachedProject(projectCacheRef.current[MANUAL_PROJECT_ID]);
+      setLoadingDoc(false);
+      return;
     }
 
     setLoadingDoc(true);
+    cancelWorkRef.current = false;
     setStatus({ kind: "working", pct: 0, label: "Processing files…" });
     resetLocalState();
     
     const pdfs: File[] = [];
-    for (const f of files || []) {
-      const processed = await processFileToPdf(f);
+    for (let i = 0; i < (files || []).length; i++) {
+      if (cancelWorkRef.current) break;
+      setStatus({ kind: "working", pct: Math.round((i / files.length) * 40), label: `Processing file ${i + 1} of ${files.length}…` });
+      const processed = await processFileToPdf(files[i]);
       if (processed) pdfs.push(processed);
+    }
+
+    if (cancelWorkRef.current) {
+      setStatus({ kind: "idle" });
+      setLoadingDoc(false);
+      return;
     }
 
     const manualDoc: RtiDocument = {
@@ -387,7 +457,10 @@ function Index() {
     try {
       const loadedOriginals: { id: string; name: string; file: File }[] = [];
       const thumbsMap: Record<string, string[]> = {};
-      for (const file of pdfs) {
+      for (let i = 0; i < pdfs.length; i++) {
+        if (cancelWorkRef.current) break;
+        setStatus({ kind: "working", pct: 40 + Math.round((i / pdfs.length) * 60), label: `Extracting pages ${i + 1} of ${pdfs.length}…` });
+        const file = pdfs[i];
         const id = `manual-${crypto.randomUUID()}`;
         loadedOriginals.push({ id, name: file.name, file });
         try {
@@ -395,6 +468,12 @@ function Index() {
         } catch {
           thumbsMap[id] = [];
         }
+      }
+
+      if (cancelWorkRef.current) {
+        setStatus({ kind: "idle" });
+        setLoadingDoc(false);
+        return;
       }
 
       const timelineEntries: SavedTimelineEntry[] = [];
@@ -521,10 +600,15 @@ function Index() {
   }, [activeDoc, originals, originalThumbs, items, itemPaths, itemThumbs, timeline, rtiType, loadingDoc]);
 
   const addFiles = async (files: File[]) => {
-    setStatus({ kind: "working", pct: 0, label: "Processing files…" });
+    cancelWorkRef.current = false;
+    setStatus({ kind: "working", pct: 0, label: "Adding files…" });
     const next: MergeItem[] = [];
     const rejected: string[] = [];
-    for (const f of files) {
+    for (let i = 0; i < files.length; i++) {
+      if (cancelWorkRef.current) break;
+      setStatus({ kind: "working", pct: Math.round((i / files.length) * 80), label: `Adding file ${i + 1} of ${files.length}…` });
+      
+      const f = files[i];
       const kind = classify(f);
       if (!kind) {
         rejected.push(f.name);
@@ -546,6 +630,12 @@ function Index() {
 
       next.push({ id: `${itemFile.name}-${itemFile.size}-${crypto.randomUUID()}`, name: itemFile.name, kind: finalKind, file: itemFile });
     }
+
+    if (cancelWorkRef.current) {
+      setStatus({ kind: "idle" });
+      return;
+    }
+
     if (!next.length) {
       if (rejected.length) setStatus({ kind: "error", message: `Skipped: ${rejected.join(", ")}` });
       return;
@@ -566,12 +656,13 @@ function Index() {
         setItemThumbs((prev) => ({ ...prev, [it.id]: url }));
       } else {
         setItemThumbs((prev) => ({ ...prev, [it.id]: null }));
-        renderPdfFirstThumbnail(it.file)
-          .then((t) => setItemThumbs((prev) => ({ ...prev, [it.id]: t })))
-          .catch(() => {});
+        try {
+          const t = await renderPdfFirstThumbnail(it.file);
+          if (!cancelWorkRef.current) setItemThumbs((prev) => ({ ...prev, [it.id]: t }));
+        } catch {}
       }
     }
-    setStatus({ kind: "idle" });
+    if (!cancelWorkRef.current) setStatus({ kind: "idle" });
   };
 
   const removeEntry = (entryId: string) => {
@@ -775,37 +866,24 @@ function Index() {
     };
   }, []);
 
-  return (
-    <div className="flex min-h-screen bg-background">
-      <RtiSidebar activeId={activeDoc?.id ?? null} onSelect={openDocument} onDelete={deleteProject} onOpenManualEdit={() => openManualProject([])} />
-
-      <input
-        ref={replaceInputRef}
-        type="file"
-        accept="application/pdf,.pdf,image/jpeg,image/png,.jpg,.jpeg,.png"
-        className="hidden"
-        onChange={(e) => {
-          onReplaceFilePicked(e.target.files);
-          e.target.value = "";
-        }}
-      />
-
-      <div className="min-w-0 flex-1">
-        <header className="border-b border-border bg-white">
-          <div className="mx-auto flex max-w-5xl items-center gap-3 px-6 py-5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white">
-              <FileText className="h-5 w-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold text-foreground">RTI PDF Manager</h1>
-              <p className="text-xs text-muted-foreground">
-                Internal tool · Merge PDFs & images · ACK workflow
-              </p>
-            </div>
+  const mainContent = (
+    <div className="min-w-0 flex-1 h-full flex flex-col relative w-full overflow-y-auto">
+      <header className="sticky top-0 z-40 border-b border-border bg-white/90 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-5xl items-center gap-3 px-16 md:px-6 py-4 md:py-5">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white">
+            <FileText className="h-5 w-5" />
           </div>
-        </header>
+          <div>
+            <h1 className="text-lg font-semibold text-foreground">RTI PDF Manager</h1>
+            <p className="hidden sm:block text-xs text-muted-foreground">
+              Internal tool · Merge PDFs & images · ACK workflow
+            </p>
+          </div>
+        </div>
+      </header>
 
-        <main className="mx-auto max-w-5xl px-6 py-8">
+      <main className="flex-1 mx-auto w-full max-w-5xl px-4 md:px-6 py-6 md:py-8 pb-24">
+
           {!activeDoc ? (
             <div className="rounded-xl border border-dashed border-border bg-white p-8 text-center">
               <p className="text-sm font-medium text-foreground">No project open</p>
@@ -878,7 +956,21 @@ function Index() {
                   </div>
                 </div>
 
-                {timeline.length === 0 ? (
+                {loadingDoc ? (
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 animate-pulse">
+                    {[1, 2, 3, 4, 5].map(i => (
+                      <div key={i} className="flex flex-col overflow-hidden rounded-lg border border-border bg-white shadow-sm">
+                        <div className="relative flex aspect-[3/4] items-center justify-center bg-slate-100">
+                          <div className="h-6 w-6 rounded-full bg-slate-200" />
+                        </div>
+                        <div className="border-t border-border px-2 py-2">
+                          <div className="h-3 w-3/4 rounded bg-slate-200 mb-1" />
+                          <div className="h-2 w-1/2 rounded bg-slate-200" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : timeline.length === 0 ? (
                   <p className="rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
                     No pages yet.
                   </p>
@@ -973,8 +1065,19 @@ function Index() {
                 </div>
 
                 {status.kind === "working" && (
-                  <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-blue-100">
-                    <div className="h-full bg-blue-600 transition-all" style={{ width: `${status.pct}%` }} />
+                  <div className="mt-4 flex flex-col gap-2">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-blue-100">
+                        <div className="h-full bg-blue-600 transition-all" style={{ width: `${status.pct}%` }} />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { cancelWorkRef.current = true; }}
+                        className="text-xs font-semibold text-muted-foreground hover:text-red-600 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
                 )}
                 {status.kind === "done" && (
@@ -997,7 +1100,55 @@ function Index() {
             </>
           )}
         </main>
+    </div>
+  );
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-background relative w-full">
+      {/* Mobile Drawer */}
+      <div className="md:hidden absolute top-4 left-4 z-50">
+        <Sheet>
+          <SheetTrigger asChild>
+            <button className="rounded-md p-2 bg-white shadow-sm border border-border text-foreground hover:bg-slate-50">
+              <Menu className="h-5 w-5" />
+            </button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-[85vw] max-w-sm p-0 border-r-0">
+            <RtiSidebar activeId={activeDoc?.id ?? null} onSelect={openDocument} onDelete={deleteProject} onOpenManualEdit={() => openManualProject([])} />
+          </SheetContent>
+        </Sheet>
       </div>
+
+      {/* Desktop Layout */}
+      <div className="hidden md:flex h-full w-full">
+        <ResizablePanelGroup direction="horizontal">
+          <ResizablePanel defaultSize={25} minSize={15} maxSize={40} className="h-full">
+            <RtiSidebar activeId={activeDoc?.id ?? null} onSelect={openDocument} onDelete={deleteProject} onOpenManualEdit={() => openManualProject([])} />
+          </ResizablePanel>
+          
+          <ResizableHandle withHandle />
+          
+          <ResizablePanel defaultSize={75} className="h-full">
+            {mainContent}
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      </div>
+
+      {/* Mobile Main Content */}
+      <div className="flex md:hidden h-full w-full">
+        {mainContent}
+      </div>
+
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept="application/pdf,.pdf,image/jpeg,image/png,.jpg,.jpeg,.png"
+        className="hidden"
+        onChange={(e) => {
+          onReplaceFilePicked(e.target.files);
+          e.target.value = "";
+        }}
+      />
 
       {saveOpen && activeDoc && (
         <SaveDialog

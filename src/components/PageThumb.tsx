@@ -1,6 +1,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { FileText, Image as ImageIcon, X, RotateCw, Replace } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
 
 type Props = {
   id: string;
@@ -14,8 +15,6 @@ type Props = {
   onRotate?: () => void;
   onReplace?: () => void;
 };
-
-import React from "react";
 
 export const PageThumb = React.memo(function PageThumb({
   id,
@@ -32,6 +31,24 @@ export const PageThumb = React.memo(function PageThumb({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
   });
+
+  const [isVisible, setIsVisible] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsVisible(true);
+          obs.disconnect();
+        }
+      },
+      { rootMargin: "300px" } // Load early before it enters the viewport
+    );
+    obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, []);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -61,8 +78,10 @@ export const PageThumb = React.memo(function PageThumb({
       {...listeners}
       className="group relative flex cursor-grab touch-none flex-col overflow-hidden rounded-lg border border-border bg-white shadow-sm hover:border-blue-400 hover:shadow-md active:cursor-grabbing"
     >
-      <div className="relative flex aspect-[3/4] items-center justify-center overflow-hidden bg-slate-50">
-        {thumbnail ? (
+      <div ref={containerRef} className="relative flex aspect-[3/4] items-center justify-center overflow-hidden bg-slate-50">
+        {!isVisible ? (
+          <div className="h-6 w-6 animate-pulse rounded-full bg-slate-200" />
+        ) : thumbnail ? (
           <img
             src={thumbnail}
             alt={label}
