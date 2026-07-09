@@ -18,6 +18,7 @@ export type Database = {
         Row: {
           created_at: string
           customer_name: string
+          deletion_scheduled_at: string | null
           edited_path: string | null
           final_name: string | null
           id: string
@@ -25,12 +26,14 @@ export type Database = {
           original_path: string
           plan_json: Json | null
           rti_type: string
+          rti_type_selected: string | null
           status: string
           updated_at: string
         }
         Insert: {
           created_at?: string
           customer_name: string
+          deletion_scheduled_at?: string | null
           edited_path?: string | null
           final_name?: string | null
           id?: string
@@ -38,12 +41,14 @@ export type Database = {
           original_path: string
           plan_json?: Json | null
           rti_type: string
+          rti_type_selected?: string | null
           status?: string
           updated_at?: string
         }
         Update: {
           created_at?: string
           customer_name?: string
+          deletion_scheduled_at?: string | null
           edited_path?: string | null
           final_name?: string | null
           id?: string
@@ -51,10 +56,78 @@ export type Database = {
           original_path?: string
           plan_json?: Json | null
           rti_type?: string
+          rti_type_selected?: string | null
           status?: string
           updated_at?: string
         }
         Relationships: []
+      }
+      rti_mobile_tokens: {
+        Row: {
+          created_at: string
+          document_id: string
+          expires_at: string
+          id: string
+          token: string
+        }
+        Insert: {
+          created_at?: string
+          document_id: string
+          expires_at: string
+          id?: string
+          token: string
+        }
+        Update: {
+          created_at?: string
+          document_id?: string
+          expires_at?: string
+          id?: string
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rti_mobile_tokens_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "rti_documents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rti_originals: {
+        Row: {
+          created_at: string
+          document_id: string
+          id: string
+          name: string
+          path: string
+          sort_order: number
+        }
+        Insert: {
+          created_at?: string
+          document_id: string
+          id?: string
+          name: string
+          path: string
+          sort_order?: number
+        }
+        Update: {
+          created_at?: string
+          document_id?: string
+          id?: string
+          name?: string
+          path?: string
+          sort_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rti_originals_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "rti_documents"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
