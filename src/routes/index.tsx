@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   closestCenter,
@@ -29,7 +29,6 @@ import { renderPdfFirstThumbnail, renderPdfThumbnails } from "@/lib/pdf-thumbnai
 import {
   deleteDocumentData,
   downloadFromPath,
-  getDocument,
   listMobileUploads,
   listOriginals,
   loadItemFile,
@@ -42,7 +41,6 @@ import {
   type SavedPlan,
   type SavedPlanItem,
   type SavedTimelineEntry,
-  type TextAnnotation,
 } from "@/lib/rti-storage";
 
 export const Route = createFileRoute("/")({
@@ -73,6 +71,20 @@ const STATUS_TEXT: Record<RtiStatus, string> = {
   pending: "🔴 Pending",
   waiting_ack: "🟠 Waiting for ACK",
   completed: "🟢 Completed",
+};
+
+const MANUAL_PROJECT_ID = "manual-edit";
+
+type ProjectCacheEntry = {
+  activeDoc: RtiDocument;
+  originals: { id: string; name: string; file: File }[];
+  originalThumbs: Record<string, string[]>;
+  items: MergeItem[];
+  itemPaths: Record<string, string>;
+  itemThumbs: Record<string, string | null>;
+  timeline: SavedTimelineEntry[];
+  rtiType: RtiTypeSelected;
+  seenMobilePaths: string[];
 };
 
 function classify(file: File): "pdf" | "image" | null {
@@ -115,13 +127,13 @@ function Index() {
   const [itemPaths, setItemPaths] = useState<Record<string, string>>({});
   const [itemThumbs, setItemThumbs] = useState<Record<string, string | null>>({});
   const [timeline, setTimeline] = useState<SavedTimelineEntry[]>([]);
-  const [annotations, setAnnotations] = useState<TextAnnotation[]>([]);
   const [rtiType, setRtiType] = useState<RtiTypeSelected>("RTI Application");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [loadingDoc, setLoadingDoc] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const objectUrlsRef = useRef<string[]>([]);
   const seenMobilePathsRef = useRef<Set<string>>(new Set());
+  const projectCacheRef = useRef<Record<string, ProjectCacheEntry>>({});
   const replaceForEntryRef = useRef<string | null>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
 
@@ -139,6 +151,36 @@ function Index() {
     return m;
   }, [items]);
 
+  const isManualProject = activeDoc?.id === MANUAL_PROJECT_ID;
+
+  const cacheCurrentProject = () => {
+    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID || loadingDoc) return;
+    projectCacheRef.current[activeDoc.id] = {
+      activeDoc,
+      originals,
+      originalThumbs,
+      items,
+      itemPaths,
+      itemThumbs,
+      timeline,
+      rtiType,
+      seenMobilePaths: Array.from(seenMobilePathsRef.current),
+    };
+  };
+
+  const restoreCachedProject = (cached: ProjectCacheEntry) => {
+    setActiveDoc(cached.activeDoc);
+    setOriginals(cached.originals);
+    setOriginalThumbs(cached.originalThumbs);
+    setItems(cached.items);
+    setItemPaths(cached.itemPaths);
+    setItemThumbs(cached.itemThumbs);
+    setTimeline(cached.timeline);
+    setRtiType(cached.rtiType);
+    seenMobilePathsRef.current = new Set(cached.seenMobilePaths);
+    setStatus({ kind: "idle" });
+  };
+
   const resetLocalState = () => {
     setOriginals([]);
     setOriginalThumbs({});
@@ -146,7 +188,6 @@ function Index() {
     setItemPaths({});
     setItemThumbs({});
     setTimeline([]);
-    setAnnotations([]);
     setStatus({ kind: "idle" });
     seenMobilePathsRef.current = new Set();
     for (const u of objectUrlsRef.current) URL.revokeObjectURL(u);
@@ -155,6 +196,16 @@ function Index() {
 
   const openDocument = async (doc: RtiDocument) => {
     if (activeDoc?.id === doc.id) return;
+    const cached = projectCacheRef.current[doc.id];
+    if (cached) {
+      setLoadingDoc(true);
+      setStatus({ kind: "working", pct: 0, label: "Loading project…" });
+      resetLocalState();
+      restoreCachedProject(cached);
+      setLoadingDoc(false);
+      return;
+    }
+
     setLoadingDoc(true);
     setStatus({ kind: "working", pct: 0, label: "Loading project…" });
     resetLocalState();
@@ -204,9 +255,7 @@ function Index() {
         setItemPaths(nextPaths);
         setItemThumbs(nextThumbs);
         setTimeline(plan.timeline);
-        setAnnotations(plan.annotations ?? []);
       } else {
-        // Seed timeline from originals' pages in order.
         const t: SavedTimelineEntry[] = [];
         for (const o of loadedOriginals) {
           const count = thumbsMap[o.id]?.length ?? 0;
@@ -222,7 +271,6 @@ function Index() {
         setTimeline(t);
       }
 
-      // Seed mobile-seen set with current uploads so only new ones auto-add.
       try {
         const existing = await listMobileUploads(doc.id);
         for (const m of existing) seenMobilePathsRef.current.add(m.path);
@@ -238,9 +286,79 @@ function Index() {
     }
   };
 
+  const openManualProject = async (files: File[]) => {
+    const pdfs = files.filter(
+      (file) => file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf",
+    );
+    if (!pdfs.length) {
+      setStatus({ kind: "error", message: "Manual edit mode accepts PDF files only." });
+      return;
+    }
+
+    setLoadingDoc(true);
+    setStatus({ kind: "working", pct: 0, label: "Loading manual project…" });
+    resetLocalState();
+
+    const manualDoc: RtiDocument = {
+      id: MANUAL_PROJECT_ID,
+      customer_name: "Manual Edit",
+      rti_type: "RTI",
+      status: "pending",
+      original_path: "",
+      original_name: pdfs[0].name,
+      edited_path: null,
+      final_name: null,
+      plan_json: null,
+      rti_type_selected: "RTI Application",
+      deletion_scheduled_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    try {
+      const loadedOriginals: { id: string; name: string; file: File }[] = [];
+      const thumbsMap: Record<string, string[]> = {};
+      for (const file of pdfs) {
+        const id = `manual-${crypto.randomUUID()}`;
+        loadedOriginals.push({ id, name: file.name, file });
+        try {
+          thumbsMap[id] = await renderPdfThumbnails(file);
+        } catch {
+          thumbsMap[id] = [];
+        }
+      }
+
+      const timelineEntries: SavedTimelineEntry[] = [];
+      for (const original of loadedOriginals) {
+        const count = thumbsMap[original.id]?.length ?? 0;
+        for (let i = 0; i < count; i++) {
+          timelineEntries.push({
+            id: `manual-orig-${original.id}-${i}-${crypto.randomUUID()}`,
+            type: "original-page",
+            originalId: original.id,
+            pageIndex: i,
+          });
+        }
+      }
+
+      setActiveDoc(manualDoc);
+      setRtiType("RTI Application");
+      setOriginals(loadedOriginals);
+      setOriginalThumbs(thumbsMap);
+      setTimeline(timelineEntries);
+      setStatus({ kind: "idle" });
+    } catch (err) {
+      setStatus({ kind: "error", message: `Failed to open manual edit: ${(err as Error).message}` });
+      setActiveDoc(null);
+      resetLocalState();
+    } finally {
+      setLoadingDoc(false);
+    }
+  };
+
   // Poll mobile uploads for the active project (light polling every 4s).
   useEffect(() => {
-    if (!activeDoc) return;
+    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
     let cancelled = false;
     const tick = async () => {
       try {
@@ -281,16 +399,32 @@ function Index() {
         /* ignore */
       }
     };
+    const mobileChannel = supabase
+      .channel(`rti_mobile_tokens_${activeDoc.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "rti_mobile_tokens",
+          filter: `document_id=eq.${activeDoc.id}`,
+        },
+        () => {
+          void tick();
+        },
+      )
+      .subscribe();
     const iv = window.setInterval(tick, 4000);
     return () => {
       cancelled = true;
+      supabase.removeChannel(mobileChannel);
       window.clearInterval(iv);
     };
   }, [activeDoc]);
 
   // Live-updated status via realtime
   useEffect(() => {
-    if (!activeDoc) return;
+    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
     const channel = supabase
       .channel(`rti_doc_${activeDoc.id}`)
       .on(
@@ -305,6 +439,10 @@ function Index() {
       supabase.removeChannel(channel);
     };
   }, [activeDoc?.id]);
+
+  useEffect(() => {
+    cacheCurrentProject();
+  }, [activeDoc, originals, originalThumbs, items, itemPaths, itemThumbs, timeline, rtiType, loadingDoc]);
 
   const addFiles = (files: File[]) => {
     const next: MergeItem[] = [];
@@ -347,7 +485,6 @@ function Index() {
 
   const removeEntry = (entryId: string) => {
     setTimeline((prev) => prev.filter((e) => e.id !== entryId));
-    setAnnotations((prev) => prev.filter((a) => a.entryId !== entryId));
   };
 
   const rotateEntry = (entryId: string) => {
@@ -385,27 +522,6 @@ function Index() {
         e.id === targetId ? { id: e.id, type: "item", itemId: it.id, rotation: 0 } : e,
       ),
     );
-    setAnnotations((prev) => prev.filter((a) => a.entryId !== targetId));
-  };
-
-  const addTextAnnotation = (entryId: string) => {
-    const a: TextAnnotation = {
-      id: crypto.randomUUID(),
-      entryId,
-      x: 0.1,
-      y: 0.1,
-      widthFrac: 0.4,
-      fontSize: 14,
-      text: "New text",
-    };
-    setAnnotations((prev) => [...prev, a]);
-  };
-
-  const updateAnnotation = (id: string, patch: Partial<TextAnnotation>) => {
-    setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
-  };
-  const deleteAnnotation = (id: string) => {
-    setAnnotations((prev) => prev.filter((a) => a.id !== id));
   };
 
   const onTimelineDragEnd = (e: DragEndEvent) => {
@@ -448,12 +564,17 @@ function Index() {
         })
         .filter((x): x is PlanEntry => x !== null);
 
-      const blob = await mergeByPlan(originalFiles, plan, annotations, (pct) =>
+      const blob = await mergeByPlan(originalFiles, plan, (pct) =>
         setStatus({ kind: "working", pct, label: "Merging pages…" }),
       );
 
       const filename = buildFilename(activeDoc.customer_name, chosen);
       downloadBlob(blob, filename);
+
+      if (activeDoc.id === MANUAL_PROJECT_ID) {
+        setStatus({ kind: "done", message: `Saved ${filename}` });
+        return;
+      }
 
       setStatus({ kind: "working", pct: 100, label: "Saving to queue…" });
       const nextPaths = { ...itemPaths };
@@ -470,7 +591,7 @@ function Index() {
         kind: it.kind,
         path: nextPaths[it.id],
       }));
-      const savedPlan: SavedPlan = { items: savedItems, timeline, annotations };
+      const savedPlan: SavedPlan = { items: savedItems, timeline };
       const editedPath = await uploadEdited(activeDoc.id, blob, filename);
       const newStatus = nextStatus(activeDoc.status);
       const patch: Parameters<typeof updateDocument>[1] = {
@@ -485,6 +606,17 @@ function Index() {
       }
       const updated = await updateDocument(activeDoc.id, patch);
       setActiveDoc(updated);
+      projectCacheRef.current[activeDoc.id] = {
+        activeDoc: updated,
+        originals,
+        originalThumbs,
+        items,
+        itemPaths: nextPaths,
+        itemThumbs,
+        timeline,
+        rtiType: chosen,
+        seenMobilePaths: Array.from(seenMobilePathsRef.current),
+      };
       setStatus({ kind: "done", message: `Saved. Status: ${STATUS_TEXT[newStatus]}` });
     } catch (err) {
       setStatus({ kind: "error", message: (err as Error).message });
@@ -501,8 +633,18 @@ function Index() {
     if (!activeDoc) return;
     if (!confirm("Delete project data now? Saved PDFs on disk are kept.")) return;
     await deleteDocumentData(activeDoc.id);
+    delete projectCacheRef.current[activeDoc.id];
     setActiveDoc(null);
     resetLocalState();
+  };
+
+  const deleteProject = async (doc: RtiDocument) => {
+    await deleteDocumentData(doc.id);
+    delete projectCacheRef.current[doc.id];
+    if (activeDoc?.id === doc.id) {
+      setActiveDoc(null);
+      resetLocalState();
+    }
   };
 
   const canGenerate = timeline.length > 0 && status.kind !== "working" && !loadingDoc && !!activeDoc;
@@ -515,7 +657,7 @@ function Index() {
 
   return (
     <div className="flex min-h-screen bg-background">
-      <RtiSidebar activeId={activeDoc?.id ?? null} onSelect={openDocument} />
+      <RtiSidebar activeId={activeDoc?.id ?? null} onSelect={openDocument} onDelete={deleteProject} />
 
       <input
         ref={replaceInputRef}
@@ -545,11 +687,21 @@ function Index() {
 
         <main className="mx-auto max-w-5xl px-6 py-8">
           {!activeDoc ? (
-            <div className="rounded-xl border border-dashed border-border bg-white p-10 text-center">
+            <div className="rounded-xl border border-dashed border-border bg-white p-8 text-center">
               <p className="text-sm font-medium text-foreground">No project open</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Pick a project from the queue on the left, or add one via <b>Admin Upload</b>.
+                Pick a project from the queue on the left, use <b>Admin Upload</b>, or start a
+                manual edit by dropping one or more PDFs below.
               </p>
+              <div className="mt-5 text-left">
+                <Dropzone
+                  label="Start manual edit"
+                  hint="Drop one or more PDFs to open them directly in the editor"
+                  multiple
+                  accept="application/pdf,.pdf"
+                  onFiles={openManualProject}
+                />
+              </div>
             </div>
           ) : (
             <>
@@ -566,7 +718,7 @@ function Index() {
                 </span>
               </div>
 
-              {activeDoc.status === "completed" && activeDoc.deletion_scheduled_at && (
+              {!isManualProject && activeDoc.status === "completed" && activeDoc.deletion_scheduled_at && (
                 <AutoDeleteBanner
                   scheduledAt={activeDoc.deletion_scheduled_at}
                   onCancel={cancelAutoDelete}
@@ -574,9 +726,11 @@ function Index() {
                 />
               )}
 
-              <div className="mb-6">
-                <QrPhonePanel docId={activeDoc.id} />
-              </div>
+              {!isManualProject && (
+                <div className="mb-6">
+                  <QrPhonePanel docId={activeDoc.id} />
+                </div>
+              )}
 
               <section className="rounded-xl border border-border bg-white p-5 shadow-sm">
                 <h2 className="mb-1 text-sm font-semibold text-foreground">Add more files</h2>
@@ -599,7 +753,7 @@ function Index() {
                       Page editor ({timeline.length} page{timeline.length === 1 ? "" : "s"})
                     </h2>
                     <p className="text-xs text-muted-foreground">
-                      Drag to reorder · Hover a page for rotate, replace, add text, delete.
+                      Drag to reorder · Hover a page for rotate, replace, delete.
                     </p>
                   </div>
                 </div>
@@ -617,7 +771,6 @@ function Index() {
                     <SortableContext items={timeline.map((e) => e.id)} strategy={rectSortingStrategy}>
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
                         {timeline.map((entry, idx) => {
-                          const anns = annotations.filter((a) => a.entryId === entry.id);
                           if (entry.type === "original-page") {
                             const orig = originalsById.get(entry.originalId);
                             const thumbs = originalThumbs[entry.originalId] ?? [];
@@ -633,9 +786,7 @@ function Index() {
                                   onDelete={() => removeEntry(entry.id)}
                                   onRotate={() => rotateEntry(entry.id)}
                                   onReplace={() => startReplace(entry.id)}
-                                  onAddText={() => addTextAnnotation(entry.id)}
                                 />
-                                <AnnotationBadge count={anns.length} />
                               </div>
                             );
                           }
@@ -654,9 +805,7 @@ function Index() {
                                 onDelete={() => removeEntry(entry.id)}
                                 onRotate={() => rotateEntry(entry.id)}
                                 onReplace={() => startReplace(entry.id)}
-                                onAddText={() => addTextAnnotation(entry.id)}
                               />
-                              <AnnotationBadge count={anns.length} />
                             </div>
                           );
                         })}
@@ -665,47 +814,6 @@ function Index() {
                   </DndContext>
                 )}
               </section>
-
-              {annotations.length > 0 && (
-                <section className="mt-6 rounded-xl border border-border bg-white p-5 shadow-sm">
-                  <h2 className="mb-3 text-sm font-semibold text-foreground">Text annotations</h2>
-                  <p className="mb-3 text-xs text-muted-foreground">
-                    Editable overlays for IPO Number, Speed Post Number, Date, Reference Number, notes.
-                    Text is flattened into the PDF on Save.
-                  </p>
-                  <div className="flex flex-col gap-2">
-                    {annotations.map((a) => (
-                      <div key={a.id} className="grid grid-cols-1 gap-2 rounded-lg border border-border bg-slate-50/40 p-3 sm:grid-cols-[1fr_auto_auto_auto_auto]">
-                        <input
-                          type="text"
-                          value={a.text}
-                          onChange={(e) => updateAnnotation(a.id, { text: e.target.value })}
-                          className="rounded border border-input bg-white px-2 py-1 text-sm"
-                          placeholder="Text content"
-                        />
-                        <input
-                          type="number"
-                          min={6}
-                          max={72}
-                          value={a.fontSize}
-                          onChange={(e) => updateAnnotation(a.id, { fontSize: Number(e.target.value) })}
-                          className="w-20 rounded border border-input bg-white px-2 py-1 text-sm"
-                          title="Font size"
-                        />
-                        <PositionInput label="X%" value={a.x} onChange={(v) => updateAnnotation(a.id, { x: v })} />
-                        <PositionInput label="Y%" value={a.y} onChange={(v) => updateAnnotation(a.id, { y: v })} />
-                        <button
-                          type="button"
-                          onClick={() => deleteAnnotation(a.id)}
-                          className="rounded-md p-1.5 text-muted-foreground hover:bg-red-50 hover:text-red-600"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
 
               <section className="mt-6 rounded-xl border border-border bg-white p-5 shadow-sm">
                 <div className="flex flex-wrap items-center gap-3">
@@ -765,40 +873,6 @@ function Index() {
         />
       )}
     </div>
-  );
-}
-
-function PositionInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <label className="flex items-center gap-1 text-xs text-muted-foreground">
-      {label}
-      <input
-        type="number"
-        min={0}
-        max={100}
-        step={1}
-        value={Math.round(value * 100)}
-        onChange={(e) => onChange(Math.max(0, Math.min(100, Number(e.target.value))) / 100)}
-        className="w-16 rounded border border-input bg-white px-1.5 py-1 text-sm text-foreground"
-      />
-    </label>
-  );
-}
-
-function AnnotationBadge({ count }: { count: number }) {
-  if (!count) return null;
-  return (
-    <span className="pointer-events-none absolute -bottom-1 -right-1 rounded-full bg-purple-600 px-1.5 py-0.5 text-[10px] font-bold text-white shadow">
-      T·{count}
-    </span>
   );
 }
 
@@ -898,5 +972,3 @@ function SaveDialog({
   );
 }
 
-// Suppress unused imports warning for getDocument (kept for future use).
-void getDocument;

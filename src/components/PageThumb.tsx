@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FileText, Image as ImageIcon, X, RotateCw, Replace, Type as TypeIcon } from "lucide-react";
+import { FileText, Image as ImageIcon, X, RotateCw, Replace } from "lucide-react";
 
 type Props = {
   id: string;
@@ -13,7 +13,6 @@ type Props = {
   onDelete?: () => void;
   onRotate?: () => void;
   onReplace?: () => void;
-  onAddText?: () => void;
 };
 
 export function PageThumb({
@@ -27,7 +26,6 @@ export function PageThumb({
   onDelete,
   onRotate,
   onReplace,
-  onAddText,
 }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
@@ -66,6 +64,7 @@ export function PageThumb({
           <img
             src={thumbnail}
             alt={label}
+            loading="lazy"
             className="h-full w-full object-contain transition-transform"
             style={{ transform: `rotate(${rotation}deg)` }}
           />
@@ -81,11 +80,6 @@ export function PageThumb({
         </span>
 
         <div className="absolute right-1 top-1 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-          {onAddText && (
-            <IconBtn onClick={onAddText} onPointerDown={stop} title="Add text">
-              <TypeIcon className="h-3.5 w-3.5" />
-            </IconBtn>
-          )}
           {onRotate && (
             <IconBtn onClick={onRotate} onPointerDown={stop} title="Rotate 90°">
               <RotateCw className="h-3.5 w-3.5" />

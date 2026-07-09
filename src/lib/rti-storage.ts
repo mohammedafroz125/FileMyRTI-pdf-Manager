@@ -39,20 +39,9 @@ export type SavedTimelineEntry =
   | { id: string; type: "original-page"; originalId: string; pageIndex: number; rotation?: number }
   | { id: string; type: "item"; itemId: string; rotation?: number };
 
-export type TextAnnotation = {
-  id: string;
-  entryId: string; // which timeline entry it lives on
-  x: number; // fraction 0..1 of page width
-  y: number; // fraction 0..1 of page height
-  widthFrac: number; // fraction of page width
-  fontSize: number; // in pt (relative to a 72dpi baseline)
-  text: string;
-};
-
 export type SavedPlan = {
   items: SavedPlanItem[];
   timeline: SavedTimelineEntry[];
-  annotations?: TextAnnotation[];
 };
 
 const BUCKET = "rti-files";
@@ -229,14 +218,12 @@ export async function updateDocument(
 
 export async function deleteDocumentData(id: string): Promise<void> {
   // Delete all storage objects under this id/ prefix.
-  const { data: list } = await supabase.storage.from(BUCKET).list(id, { limit: 1000 });
   const paths: string[] = [];
   const subfolders = ["originals", "items", "edited", "mobile"];
   for (const sub of subfolders) {
     const { data: subList } = await supabase.storage.from(BUCKET).list(`${id}/${sub}`, { limit: 1000 });
     if (subList) for (const f of subList) paths.push(`${id}/${sub}/${f.name}`);
   }
-  if (list) for (const f of list) if (!subfolders.includes(f.name)) paths.push(`${id}/${f.name}`);
   if (paths.length) await supabase.storage.from(BUCKET).remove(paths);
   const { error } = await supabase.from("rti_documents").delete().eq("id", id);
   if (error) throw error;

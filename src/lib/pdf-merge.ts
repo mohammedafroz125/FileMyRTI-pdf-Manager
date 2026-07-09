@@ -1,5 +1,4 @@
 import { PDFDocument, StandardFonts, degrees, rgb, type PDFPage } from "pdf-lib";
-import type { TextAnnotation } from "@/lib/rti-storage";
 
 export type MergeItem = {
   id: string;
@@ -15,7 +14,6 @@ export type PlanEntry =
 export async function mergeByPlan(
   originals: Record<string, File>,
   plan: PlanEntry[],
-  annotations: TextAnnotation[] = [],
   onProgress?: (pct: number) => void,
 ): Promise<Blob> {
   if (plan.length === 0) throw new Error("No pages to merge");
@@ -34,35 +32,6 @@ export async function mergeByPlan(
     return doc;
   };
 
-  const anByEntry = new Map<string, TextAnnotation[]>();
-  for (const a of annotations) {
-    const arr = anByEntry.get(a.entryId) ?? [];
-    arr.push(a);
-    anByEntry.set(a.entryId, arr);
-  }
-
-  const applyAnnotations = (page: PDFPage, entryId: string) => {
-    const list = anByEntry.get(entryId);
-    if (!list?.length) return;
-    const { width, height } = page.getSize();
-    for (const a of list) {
-      const text = a.text ?? "";
-      if (!text.trim()) continue;
-      const size = Math.max(6, a.fontSize || 12);
-      const px = a.x * width;
-      // Convert top-origin fraction to PDF bottom-origin baseline.
-      const py = height - a.y * height - size;
-      page.drawText(text, {
-        x: px,
-        y: py,
-        size,
-        font,
-        color: rgb(0, 0, 0),
-        maxWidth: (a.widthFrac || 0.5) * width,
-      });
-    }
-  };
-
   let done = 0;
   for (const entry of plan) {
     if (entry.kind === "original-page") {
@@ -71,8 +40,7 @@ export async function mergeByPlan(
       const src = await loadPdf(`orig-${entry.originalId}`, file);
       const [page] = await out.copyPages(src, [entry.pageIndex]);
       if (entry.rotation) page.setRotation(degrees(((entry.rotation % 360) + 360) % 360));
-      const added = out.addPage(page);
-      applyAnnotations(added, entry.entryId);
+      out.addPage(page);
     } else {
       const it = entry.item;
       if (it.kind === "pdf") {
@@ -80,8 +48,7 @@ export async function mergeByPlan(
         const pages = await out.copyPages(src, src.getPageIndices());
         pages.forEach((p, i) => {
           if (entry.rotation) p.setRotation(degrees(((entry.rotation % 360) + 360) % 360));
-          const added = out.addPage(p);
-          if (i === 0) applyAnnotations(added, entry.entryId);
+          out.addPage(p);
         });
       } else {
         const bytes = await it.file.arrayBuffer();
@@ -92,7 +59,6 @@ export async function mergeByPlan(
         const page = out.addPage([img.width, img.height]);
         page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
         if (entry.rotation) page.setRotation(degrees(((entry.rotation % 360) + 360) % 360));
-        applyAnnotations(page, entry.entryId);
       }
     }
     done += 1;

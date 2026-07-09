@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Plus, FileText, RefreshCw } from "lucide-react";
+import { Plus, FileText, RefreshCw, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { listDocuments, type RtiDocument, type RtiStatus } from "@/lib/rti-storage";
 
 type Props = {
   activeId?: string | null;
   onSelect: (doc: RtiDocument) => void;
+  onDelete: (doc: RtiDocument) => Promise<void>;
 };
 
 const STATUS_META: Record<RtiStatus, { dot: string; label: string; text: string }> = {
@@ -15,7 +16,7 @@ const STATUS_META: Record<RtiStatus, { dot: string; label: string; text: string 
   completed: { dot: "bg-green-500", label: "Completed", text: "text-green-700" },
 };
 
-export function RtiSidebar({ activeId, onSelect }: Props) {
+export function RtiSidebar({ activeId, onSelect, onDelete }: Props) {
   const [docs, setDocs] = useState<RtiDocument[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -80,27 +81,47 @@ export function RtiSidebar({ activeId, onSelect }: Props) {
             const active = d.id === activeId;
             return (
               <li key={d.id}>
-                <button
-                  type="button"
-                  onClick={() => onSelect(d)}
-                  className={`w-full rounded-lg px-3 py-2.5 text-left transition-colors ${
+                <div
+                  className={`flex items-stretch gap-1 rounded-lg px-1 py-0.5 transition-colors ${
                     active ? "bg-blue-50 ring-1 ring-blue-300" : "hover:bg-accent"
                   }`}
                 >
-                  <div className="flex items-start gap-2">
-                    <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-foreground">{d.customer_name}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {d.rti_type_selected ?? "RTI"}
-                      </p>
-                      <div className="mt-1 flex items-center gap-1.5">
-                        <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
-                        <span className={`text-[11px] font-medium ${meta.text}`}>{meta.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => onSelect(d)}
+                    className="min-w-0 flex-1 rounded-md px-2 py-2 text-left"
+                  >
+                    <div className="flex items-start gap-2">
+                      <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-foreground">{d.customer_name}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {d.rti_type_selected ?? "RTI"}
+                        </p>
+                        <div className="mt-1 flex items-center gap-1.5">
+                          <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
+                          <span className={`text-[11px] font-medium ${meta.text}`}>{meta.label}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </button>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!confirm(`Delete project "${d.customer_name}"? This cannot be undone.`)) {
+                        return;
+                      }
+                      await onDelete(d);
+                      await refresh();
+                    }}
+                    className="mt-1.5 h-8 w-8 shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                    aria-label={`Delete ${d.customer_name}`}
+                    title="Delete project"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </li>
             );
           })}
