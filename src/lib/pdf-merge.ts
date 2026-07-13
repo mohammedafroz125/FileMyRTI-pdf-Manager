@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, degrees, rgb, type PDFPage } from "pdf-lib";
+import { PDFDocument, degrees } from "pdf-lib";
 
 export type MergeItem = {
   id: string;
@@ -9,7 +9,7 @@ export type MergeItem = {
 
 export type PlanEntry =
   | { entryId: string; kind: "original-page"; originalId: string; pageIndex: number; rotation?: number }
-  | { entryId: string; kind: "item"; item: MergeItem; rotation?: number };
+  | { entryId: string; kind: "item"; item: MergeItem; pageIndex?: number; rotation?: number };
 
 export async function mergeByPlan(
   originals: Record<string, File>,
@@ -19,7 +19,6 @@ export async function mergeByPlan(
   if (plan.length === 0) throw new Error("No pages to merge");
 
   const out = await PDFDocument.create();
-  const font = await out.embedFont(StandardFonts.Helvetica);
 
   const cache = new Map<string, PDFDocument>();
   const loadPdf = async (key: string, file: File) => {
@@ -45,11 +44,11 @@ export async function mergeByPlan(
       const it = entry.item;
       if (it.kind === "pdf") {
         const src = await loadPdf(`item-${it.id}`, it.file);
-        const pages = await out.copyPages(src, src.getPageIndices());
-        pages.forEach((p, i) => {
-          if (entry.rotation) p.setRotation(degrees(((entry.rotation % 360) + 360) % 360));
-          out.addPage(p);
-        });
+        const pageIndex = entry.pageIndex ?? 0;
+        if (pageIndex >= src.getPageCount()) continue;
+        const [page] = await out.copyPages(src, [pageIndex]);
+        if (entry.rotation) page.setRotation(degrees(((entry.rotation % 360) + 360) % 360));
+        out.addPage(page);
       } else {
         const bytes = await it.file.arrayBuffer();
         const lower = it.name.toLowerCase();
