@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Plus, FileText, RefreshCw, Trash2 } from "lucide-react";
+import { Plus, FileText, RefreshCw, Trash2, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { listDocuments, type RtiDocument, type RtiStatus } from "@/lib/rti-storage";
 
@@ -8,15 +8,17 @@ type Props = {
   activeId?: string | null;
   onSelect: (doc: RtiDocument) => void;
   onDelete: (doc: RtiDocument) => Promise<void>;
+  onManualEdit: () => void;
 };
 
 const STATUS_META: Record<RtiStatus, { dot: string; label: string; text: string }> = {
   pending: { dot: "bg-red-500", label: "Pending", text: "text-red-700" },
-  waiting_ack: { dot: "bg-orange-500", label: "Waiting for ACK", text: "text-orange-700" },
-  completed: { dot: "bg-green-500", label: "Completed", text: "text-green-700" },
+  // legacy value — display as pending
+  waiting_ack: { dot: "bg-red-500", label: "Pending", text: "text-red-700" },
+  completed: { dot: "bg-green-500", label: "Successful", text: "text-green-700" },
 };
 
-export function RtiSidebar({ activeId, onSelect, onDelete }: Props) {
+export function RtiSidebar({ activeId, onSelect, onDelete, onManualEdit }: Props) {
   const [docs, setDocs] = useState<RtiDocument[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -46,7 +48,7 @@ export function RtiSidebar({ activeId, onSelect, onDelete }: Props) {
   }, []);
 
   return (
-    <aside className="flex h-screen w-72 shrink-0 flex-col border-r border-border bg-white">
+    <aside className="sticky top-0 flex h-screen w-72 shrink-0 flex-col border-r border-border bg-white">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold text-foreground">Pending Queue</h2>
@@ -62,14 +64,23 @@ export function RtiSidebar({ activeId, onSelect, onDelete }: Props) {
         </button>
       </div>
 
-      <Link
-        to="/admin"
-        className="mx-3 mt-3 inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
-      >
-        <Plus className="h-4 w-4" /> Admin Upload
-      </Link>
+      <div className="mx-3 mt-3 flex flex-col gap-2">
+        <Link
+          to="/admin"
+          className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+        >
+          <Plus className="h-4 w-4" /> Admin Upload
+        </Link>
+        <button
+          type="button"
+          onClick={onManualEdit}
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-white px-3 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-accent"
+        >
+          <Pencil className="h-4 w-4" /> Manual Edit
+        </button>
+      </div>
 
-      <div className="mt-3 flex-1 overflow-y-auto px-2 pb-4">
+      <div className="mt-3 min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         {docs.length === 0 && !loading && (
           <p className="mt-6 px-3 text-center text-xs text-muted-foreground">
             No projects yet. Use Admin Upload to add one.
@@ -77,7 +88,7 @@ export function RtiSidebar({ activeId, onSelect, onDelete }: Props) {
         )}
         <ul className="flex flex-col gap-1">
           {docs.map((d) => {
-            const meta = STATUS_META[d.status];
+            const meta = STATUS_META[d.status] ?? STATUS_META.pending;
             const active = d.id === activeId;
             return (
               <li key={d.id}>

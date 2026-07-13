@@ -25,7 +25,7 @@ import { PageThumb } from "@/components/PageThumb";
 import { RtiSidebar } from "@/components/RtiSidebar";
 import { QrPhonePanel } from "@/components/QrPhonePanel";
 import { mergeByPlan, type MergeItem, type PlanEntry } from "@/lib/pdf-merge";
-import { renderPdfFirstThumbnail, renderPdfThumbnails } from "@/lib/pdf-thumbnails";
+import { renderPdfThumbnails } from "@/lib/pdf-thumbnails";
 import {
   deleteDocumentData,
   downloadFromPath,
@@ -37,7 +37,6 @@ import {
   uploadItemFile,
   type RtiDocument,
   type RtiStatus,
-  type RtiTypeSelected,
   type SavedPlan,
   type SavedPlanItem,
   type SavedTimelineEntry,
@@ -69,8 +68,8 @@ type Status =
 
 const STATUS_TEXT: Record<RtiStatus, string> = {
   pending: "🔴 Pending",
-  waiting_ack: "🟠 Waiting for ACK",
-  completed: "🟢 Completed",
+  waiting_ack: "🔴 Pending",
+  completed: "🟢 Successful",
 };
 
 const MANUAL_PROJECT_ID = "manual-edit";
@@ -81,17 +80,17 @@ type ProjectCacheEntry = {
   originalThumbs: Record<string, string[]>;
   items: MergeItem[];
   itemPaths: Record<string, string>;
-  itemThumbs: Record<string, string | null>;
+  itemThumbs: Record<string, string[]>;
+  itemPageCounts: Record<string, number>;
   timeline: SavedTimelineEntry[];
-  rtiType: RtiTypeSelected;
+  pdfName: string;
   seenMobilePaths: string[];
 };
 
 function classify(file: File): "pdf" | "image" | "word" | null {
   const n = file.name.toLowerCase();
   if (n.endsWith(".pdf") || file.type === "application/pdf") return "pdf";
-  if (/\.(jpe?g|png|webp)$/.test(n) || file.type.startsWith("image/"))
-    return "image";
+  if (/\.(jpe?g|png|webp)$/.test(n) || file.type.startsWith("image/")) return "image";
   if (/\.(docx?)$/.test(n) || file.type.includes("word") || file.type.includes("msword"))
     return "word";
   return null;
@@ -99,15 +98,6 @@ function classify(file: File): "pdf" | "image" | "word" | null {
 
 function sanitizeFile(name: string): string {
   return name.replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim();
-}
-
-function buildFilename(customer: string, rti: RtiTypeSelected): string {
-  return sanitizeFile(`${customer} (${rti}).pdf`);
-}
-
-function nextStatus(current: RtiStatus): RtiStatus {
-  if (current === "pending") return "waiting_ack";
-  return "completed";
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -122,21 +112,15 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 async function savePdfBlob(blob: Blob, filename: string): Promise<boolean> {
-  const picker = (window as any).showSaveFilePicker;
+  const picker = (window as unknown as { showSaveFilePicker?: (opts: unknown) => Promise<{ createWritable: () => Promise<{ write: (b: Blob) => Promise<void>; close: () => Promise<void> }> }> }).showSaveFilePicker;
   if (typeof picker !== "function") {
     downloadBlob(blob, filename);
     return true;
   }
-
   try {
-    const handle = await picker.call(window, {
+    const handle = await picker({
       suggestedName: filename,
-      types: [
-        {
-          description: "PDF document",
-          accept: { "application/pdf": [".pdf"] },
-        },
-      ],
+      types: [{ description: "PDF document", accept: { "application/pdf": [".pdf"] } }],
     });
     const writable = await handle.createWritable();
     await writable.write(blob);
@@ -149,19 +133,60 @@ async function savePdfBlob(blob: Blob, filename: string): Promise<boolean> {
   }
 }
 
+async function fileToPdf(file: File): Promise<File | null> {
+  const kind = classify(file);
+  if (kind === "pdf") return file;
+  if (kind === "word") {
+    try {
+      const { convertWordToPdfBlob } = await import("@/lib/word-to-pdf");
+      const blob = await convertWordToPdfBlob(file);
+      return new File([blob], file.name.replace(/\.docx?$/i, ".pdf"), {
+        type: "application/pdf",
+      });
+    } catch (e) {
+      console.error("Word conversion failed", e);
+      return null;
+    }
+  }
+  if (kind === "image") {
+    try {
+      const { jsPDF } = await import("jspdf");
+      const pdf = new jsPDF();
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.src = url;
+      await new Promise((r) => { img.onload = r; });
+      const imgProps = pdf.getImageProperties(img);
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      pdf.addImage(img, "JPEG", 0, 0, pdfWidth, pdfHeight);
+      URL.revokeObjectURL(url);
+      return new File([pdf.output("blob")], file.name + ".pdf", { type: "application/pdf" });
+    } catch (e) {
+      console.error("Image conversion failed", e);
+      return null;
+    }
+  }
+  return null;
+}
+
+function defaultPdfNameForDoc(doc: RtiDocument): string {
+  if (doc.final_name) return doc.final_name.replace(/\.pdf$/i, "");
+  return doc.original_name.replace(/\.pdf$/i, "");
+}
+
 function Index() {
   const [activeDoc, setActiveDoc] = useState<RtiDocument | null>(null);
   const [originals, setOriginals] = useState<{ id: string; name: string; file: File }[]>([]);
   const [originalThumbs, setOriginalThumbs] = useState<Record<string, string[]>>({});
   const [items, setItems] = useState<MergeItem[]>([]);
   const [itemPaths, setItemPaths] = useState<Record<string, string>>({});
-  const [itemThumbs, setItemThumbs] = useState<Record<string, string | null>>({});
+  const [itemThumbs, setItemThumbs] = useState<Record<string, string[]>>({});
+  const [itemPageCounts, setItemPageCounts] = useState<Record<string, number>>({});
   const [timeline, setTimeline] = useState<SavedTimelineEntry[]>([]);
-  const [rtiType, setRtiType] = useState<RtiTypeSelected>("RTI Application");
+  const [pdfName, setPdfName] = useState<string>("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [loadingDoc, setLoadingDoc] = useState(false);
-  const [saveOpen, setSaveOpen] = useState(false);
-  const [manualPdfName, setManualPdfName] = useState("");
   const objectUrlsRef = useRef<string[]>([]);
   const seenMobilePathsRef = useRef<Set<string>>(new Set());
   const projectCacheRef = useRef<Record<string, ProjectCacheEntry>>({});
@@ -169,7 +194,6 @@ function Index() {
   const replaceInputRef = useRef<HTMLInputElement>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
-  // Stable session ID for Manual Edit QR — persists for the lifetime of the component.
   const manualSessionIdRef = useRef<string>(crypto.randomUUID());
 
   const originalsById = useMemo(() => {
@@ -195,8 +219,9 @@ function Index() {
       items,
       itemPaths,
       itemThumbs,
+      itemPageCounts,
       timeline,
-      rtiType,
+      pdfName,
       seenMobilePaths: Array.from(seenMobilePathsRef.current),
     };
   };
@@ -208,8 +233,9 @@ function Index() {
     setItems(cached.items);
     setItemPaths(cached.itemPaths);
     setItemThumbs(cached.itemThumbs);
+    setItemPageCounts(cached.itemPageCounts);
     setTimeline(cached.timeline);
-    setRtiType(cached.rtiType);
+    setPdfName(cached.pdfName);
     seenMobilePathsRef.current = new Set(cached.seenMobilePaths);
     setStatus({ kind: "idle" });
   };
@@ -220,17 +246,85 @@ function Index() {
     setItems([]);
     setItemPaths({});
     setItemThumbs({});
+    setItemPageCounts({});
     setTimeline([]);
+    setPdfName("");
     setStatus({ kind: "idle" });
     seenMobilePathsRef.current = new Set();
   };
 
+  // ---------- Add PDF/image item helper (expands PDF into per-page timeline entries) ----------
+  const registerItem = async (
+    file: File,
+    kind: "pdf" | "image",
+    opts?: { append?: boolean; replaceEntryId?: string },
+  ): Promise<void> => {
+    const it: MergeItem = {
+      id: `item-${crypto.randomUUID()}`,
+      name: file.name,
+      kind,
+      file,
+    };
+    setItems((prev) => [...prev, it]);
+
+    if (kind === "image") {
+      const url = URL.createObjectURL(file);
+      objectUrlsRef.current.push(url);
+      setItemThumbs((prev) => ({ ...prev, [it.id]: [url] }));
+      setItemPageCounts((prev) => ({ ...prev, [it.id]: 1 }));
+      const entry: SavedTimelineEntry = {
+        id: `entry-${crypto.randomUUID()}`,
+        type: "item",
+        itemId: it.id,
+        pageIndex: 0,
+      };
+      if (opts?.replaceEntryId) {
+        setTimeline((prev) =>
+          prev.map((e) => (e.id === opts.replaceEntryId ? { ...entry, id: e.id } : e)),
+        );
+      } else {
+        setTimeline((prev) => [...prev, entry]);
+      }
+      return;
+    }
+
+    // PDF item: render all pages, push one timeline entry per page
+    let thumbs: string[] = [];
+    try {
+      thumbs = await renderPdfThumbnails(file);
+    } catch (e) {
+      console.error("PDF thumb render failed", e);
+    }
+    const pageCount = Math.max(1, thumbs.length);
+    setItemThumbs((prev) => ({ ...prev, [it.id]: thumbs }));
+    setItemPageCounts((prev) => ({ ...prev, [it.id]: pageCount }));
+
+    const newEntries: SavedTimelineEntry[] = Array.from({ length: pageCount }, (_, i) => ({
+      id: `entry-${crypto.randomUUID()}`,
+      type: "item",
+      itemId: it.id,
+      pageIndex: i,
+    }));
+
+    if (opts?.replaceEntryId) {
+      setTimeline((prev) => {
+        const idx = prev.findIndex((e) => e.id === opts.replaceEntryId);
+        if (idx < 0) return [...prev, ...newEntries];
+        const copy = [...prev];
+        copy.splice(idx, 1, ...newEntries);
+        return copy;
+      });
+    } else {
+      setTimeline((prev) => [...prev, ...newEntries]);
+    }
+  };
+
   const openDocument = async (doc: RtiDocument) => {
     if (activeDoc?.id === doc.id) return;
+    cacheCurrentProject();
     const cached = projectCacheRef.current[doc.id];
     if (cached) {
       setLoadingDoc(true);
-      setStatus({ kind: "working", pct: 0, label: "Loading project…" });
       resetLocalState();
       restoreCachedProject(cached);
       setLoadingDoc(false);
@@ -241,7 +335,7 @@ function Index() {
     setStatus({ kind: "working", pct: 0, label: "Loading project…" });
     resetLocalState();
     setActiveDoc(doc);
-    setRtiType(doc.rti_type_selected ?? "RTI Application");
+    setPdfName(defaultPdfNameForDoc(doc));
     try {
       const origRows = await listOriginals(doc.id);
       const loadedOriginals: { id: string; name: string; file: File }[] = [];
@@ -262,7 +356,8 @@ function Index() {
       if (plan) {
         const restoredItems: MergeItem[] = [];
         const nextPaths: Record<string, string> = {};
-        const nextThumbs: Record<string, string | null> = {};
+        const nextThumbs: Record<string, string[]> = {};
+        const nextCounts: Record<string, number> = {};
         for (const savedItem of plan.items) {
           try {
             const f = await loadItemFile(savedItem);
@@ -271,12 +366,17 @@ function Index() {
             if (savedItem.kind === "image") {
               const url = URL.createObjectURL(f);
               objectUrlsRef.current.push(url);
-              nextThumbs[savedItem.id] = url;
+              nextThumbs[savedItem.id] = [url];
+              nextCounts[savedItem.id] = 1;
             } else {
-              nextThumbs[savedItem.id] = null;
-              renderPdfFirstThumbnail(f)
-                .then((t) => setItemThumbs((prev) => ({ ...prev, [savedItem.id]: t })))
-                .catch(() => {});
+              try {
+                const t = await renderPdfThumbnails(f);
+                nextThumbs[savedItem.id] = t;
+                nextCounts[savedItem.id] = Math.max(1, t.length);
+              } catch {
+                nextThumbs[savedItem.id] = [];
+                nextCounts[savedItem.id] = 1;
+              }
             }
           } catch (e) {
             console.error("Skipping missing item", savedItem, e);
@@ -285,7 +385,31 @@ function Index() {
         setItems(restoredItems);
         setItemPaths(nextPaths);
         setItemThumbs(nextThumbs);
-        setTimeline(plan.timeline);
+        setItemPageCounts(nextCounts);
+
+        // Migrate legacy timeline entries (no pageIndex on item) → expand to all pages
+        const migrated: SavedTimelineEntry[] = [];
+        for (const e of plan.timeline) {
+          if (e.type === "item") {
+            const count = nextCounts[e.itemId] ?? 1;
+            if (e.pageIndex === undefined && count > 1) {
+              for (let i = 0; i < count; i++) {
+                migrated.push({
+                  id: `entry-${crypto.randomUUID()}`,
+                  type: "item",
+                  itemId: e.itemId,
+                  pageIndex: i,
+                  rotation: e.rotation,
+                });
+              }
+            } else {
+              migrated.push({ ...e, pageIndex: e.pageIndex ?? 0 });
+            }
+          } else {
+            migrated.push(e);
+          }
+        }
+        setTimeline(migrated);
       } else {
         const t: SavedTimelineEntry[] = [];
         for (const o of loadedOriginals) {
@@ -317,110 +441,51 @@ function Index() {
     }
   };
 
-  const processFileToPdf = async (file: File): Promise<File | null> => {
-    const kind = classify(file);
-    if (kind === "pdf") return file;
-    if (kind === "word") {
-      try {
-        const { convertWordToPdfBlob } = await import("@/lib/word-to-pdf");
-        const blob = await convertWordToPdfBlob(file);
-        return new File([blob], file.name.replace(/\.docx?$/i, ".pdf"), { type: "application/pdf" });
-      } catch (e) {
-        console.error("Word conversion failed", e);
-        return null;
-      }
-    }
-    if (kind === "image") {
-      try {
-        const { jsPDF } = await import("jspdf");
-        const pdf = new jsPDF();
-        const url = URL.createObjectURL(file);
-        const img = new Image();
-        img.src = url;
-        await new Promise((r) => { img.onload = r; });
-        const imgProps = pdf.getImageProperties(img);
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-        pdf.addImage(img, "JPEG", 0, 0, pdfWidth, pdfHeight);
-        URL.revokeObjectURL(url);
-        return new File([pdf.output("blob")], file.name + ".pdf", { type: "application/pdf" });
-      } catch (e) {
-        console.error("Image conversion failed", e);
-        return null;
-      }
-    }
-    return null;
-  };
-
   const openManualProject = async (files: File[]) => {
+    if (activeDoc?.id === MANUAL_PROJECT_ID && files.length === 0) {
+      // already open, just re-focus
+      return;
+    }
     if (activeDoc?.id === MANUAL_PROJECT_ID) {
-      if (!confirm("Discard current Manual Edit?\n\nPress OK to Continue and clear the workspace, or Cancel.")) {
-        return;
-      }
+      if (!confirm("Discard current Manual Edit?")) return;
     }
 
-    // Rotate the session ID so the QR panel generates a fresh token.
     manualSessionIdRef.current = crypto.randomUUID();
 
-    // If no files provided, just open an empty workspace immediately.
-    if (files.length === 0) {
-      resetLocalState();
-      const manualDoc: RtiDocument = {
-        id: MANUAL_PROJECT_ID,
-        customer_name: "Manual Edit",
-        rti_type: "RTI",
-        status: "pending",
-        original_path: "",
-        original_name: "manual-edit.pdf",
-        edited_path: null,
-        final_name: null,
-        plan_json: null,
-        rti_type_selected: "RTI Application",
-        deletion_scheduled_at: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      setManualPdfName("");
-      setActiveDoc(manualDoc);
-      setRtiType("RTI Application");
-      return;
-    }
-
-    setLoadingDoc(true);
-    setStatus({ kind: "working", pct: 0, label: "Processing files…" });
     resetLocalState();
-    
-    const pdfs: File[] = [];
-    for (const f of files) {
-      const processed = await processFileToPdf(f);
-      if (processed) pdfs.push(processed);
-    }
-
-    if (!pdfs.length) {
-      setStatus({ kind: "error", message: "No supported files found." });
-      setLoadingDoc(false);
-      return;
-    }
-
+    const initialName = files[0]?.name?.replace(/\.pdf$/i, "") ?? "";
     const manualDoc: RtiDocument = {
       id: MANUAL_PROJECT_ID,
       customer_name: "Manual Edit",
       rti_type: "RTI",
       status: "pending",
       original_path: "",
-      original_name: pdfs[0].name,
+      original_name: files[0]?.name ?? "manual-edit.pdf",
       edited_path: null,
       final_name: null,
       plan_json: null,
-      rti_type_selected: "RTI Application",
+      rti_type_selected: null,
       deletion_scheduled_at: null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
+    setActiveDoc(manualDoc);
+    setPdfName(initialName);
 
-    setManualPdfName(pdfs[0].name.replace(/\.pdf$/i, ""));
+    if (files.length === 0) return;
 
+    setLoadingDoc(true);
+    setStatus({ kind: "working", pct: 0, label: "Processing files…" });
     try {
+      const pdfs: File[] = [];
+      for (const f of files) {
+        const p = await fileToPdf(f);
+        if (p) pdfs.push(p);
+      }
+      if (!pdfs.length) {
+        setStatus({ kind: "error", message: "No supported files found." });
+        return;
+      }
       const loadedOriginals: { id: string; name: string; file: File }[] = [];
       const thumbsMap: Record<string, string[]> = {};
       for (const file of pdfs) {
@@ -432,36 +497,30 @@ function Index() {
           thumbsMap[id] = [];
         }
       }
-
       const timelineEntries: SavedTimelineEntry[] = [];
-      for (const original of loadedOriginals) {
-        const count = thumbsMap[original.id]?.length ?? 0;
+      for (const o of loadedOriginals) {
+        const count = thumbsMap[o.id]?.length ?? 0;
         for (let i = 0; i < count; i++) {
           timelineEntries.push({
-            id: `manual-orig-${original.id}-${i}-${crypto.randomUUID()}`,
+            id: `manual-orig-${o.id}-${i}-${crypto.randomUUID()}`,
             type: "original-page",
-            originalId: original.id,
+            originalId: o.id,
             pageIndex: i,
           });
         }
       }
-
-      setActiveDoc(manualDoc);
-      setRtiType("RTI Application");
       setOriginals(loadedOriginals);
       setOriginalThumbs(thumbsMap);
       setTimeline(timelineEntries);
       setStatus({ kind: "idle" });
     } catch (err) {
-      setStatus({ kind: "error", message: `Failed to open manual edit: ${(err as Error).message}` });
-      setActiveDoc(null);
-      resetLocalState();
+      setStatus({ kind: "error", message: `Failed: ${(err as Error).message}` });
     } finally {
       setLoadingDoc(false);
     }
   };
 
-  // Poll mobile uploads for the active project (light polling every 4s).
+  // Poll mobile uploads for the active DB project.
   useEffect(() => {
     if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
     let cancelled = false;
@@ -469,65 +528,55 @@ function Index() {
       try {
         const list = await listMobileUploads(activeDoc.id);
         const fresh = list.filter((m) => !seenMobilePathsRef.current.has(m.path));
-        if (fresh.length && !cancelled) {
-          for (const m of fresh) seenMobilePathsRef.current.add(m.path);
-          for (const m of fresh) {
-            const lower = m.name.toLowerCase();
-            const isPdf = lower.endsWith(".pdf");
-            const kind: "pdf" | "image" = isPdf ? "pdf" : "image";
-            const mime = isPdf
-              ? "application/pdf"
+        if (!fresh.length || cancelled) return;
+        for (const m of fresh) seenMobilePathsRef.current.add(m.path);
+        for (const m of fresh) {
+          const lower = m.name.toLowerCase();
+          const isDoc = lower.endsWith(".doc") || lower.endsWith(".docx");
+          const isPdf = lower.endsWith(".pdf");
+          const mime = isPdf
+            ? "application/pdf"
+            : isDoc
+              ? (lower.endsWith(".docx")
+                  ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  : "application/msword")
               : lower.endsWith(".png")
                 ? "image/png"
                 : "image/jpeg";
-            const file = await downloadFromPath(m.path, m.name, mime);
-            const it: MergeItem = { id: `mobile-${crypto.randomUUID()}`, name: m.name, kind, file };
-            setItems((prev) => [...prev, it]);
-            setItemPaths((prev) => ({ ...prev, [it.id]: m.path }));
-            setTimeline((prev) => [
-              ...prev,
-              { id: `entry-${crypto.randomUUID()}`, type: "item", itemId: it.id },
-            ]);
-            if (kind === "image") {
-              const url = URL.createObjectURL(file);
-              objectUrlsRef.current.push(url);
-              setItemThumbs((prev) => ({ ...prev, [it.id]: url }));
-            } else {
-              setItemThumbs((prev) => ({ ...prev, [it.id]: null }));
-              renderPdfFirstThumbnail(file)
-                .then((t) => setItemThumbs((prev) => ({ ...prev, [it.id]: t })))
-                .catch(() => {});
-            }
+          const raw = await downloadFromPath(m.path, m.name, mime);
+          let file: File = raw;
+          let kind: "pdf" | "image" = isPdf || isDoc ? "pdf" : "image";
+          if (isDoc) {
+            const conv = await fileToPdf(raw);
+            if (!conv) continue;
+            file = conv;
+            kind = "pdf";
           }
+          if (cancelled) return;
+          await registerItem(file, kind);
         }
       } catch {
         /* ignore */
       }
     };
-    const mobileChannel = supabase
+    const channel = supabase
       .channel(`rti_mobile_tokens_${activeDoc.id}`)
       .on(
         "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "rti_mobile_tokens",
-          filter: `document_id=eq.${activeDoc.id}`,
-        },
-        () => {
-          void tick();
-        },
+        { event: "*", schema: "public", table: "rti_mobile_tokens", filter: `document_id=eq.${activeDoc.id}` },
+        () => { void tick(); },
       )
       .subscribe();
     const iv = window.setInterval(tick, 4000);
     return () => {
       cancelled = true;
-      supabase.removeChannel(mobileChannel);
+      supabase.removeChannel(channel);
       window.clearInterval(iv);
     };
-  }, [activeDoc]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc?.id]);
 
-  // Poll mobile uploads for Manual Edit session (uses manualSessionIdRef, not the DB doc ID).
+  // Poll mobile uploads for Manual Edit session (uses manualSessionIdRef).
   useEffect(() => {
     if (!isManualProject) return;
     const sessionId = manualSessionIdRef.current;
@@ -545,32 +594,35 @@ function Index() {
           const path = `${sessionId}/items/${f.name}`;
           seenMobilePathsRef.current.add(path);
           const lower = f.name.toLowerCase();
+          const isDoc = lower.endsWith(".doc") || lower.endsWith(".docx");
           const isPdf = lower.endsWith(".pdf");
-          const kind: "pdf" | "image" = isPdf ? "pdf" : "image";
-          const mime = isPdf ? "application/pdf" : lower.endsWith(".png") ? "image/png" : "image/jpeg";
+          const mime = isPdf
+            ? "application/pdf"
+            : isDoc
+              ? (lower.endsWith(".docx")
+                  ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  : "application/msword")
+              : lower.endsWith(".png")
+                ? "image/png"
+                : "image/jpeg";
           const cleanName = f.name.replace(/^[a-f0-9-]+-mobile-/, "");
-          const file = await downloadFromPath(path, cleanName, mime);
-          const it: MergeItem = { id: `mobile-${crypto.randomUUID()}`, name: cleanName, kind, file };
-          if (cancelled) return;
-          setItems((prev) => [...prev, it]);
-          setTimeline((prev) => [...prev, { id: `entry-${crypto.randomUUID()}`, type: "item", itemId: it.id }]);
-          if (kind === "image") {
-            const url = URL.createObjectURL(file);
-            objectUrlsRef.current.push(url);
-            setItemThumbs((prev) => ({ ...prev, [it.id]: url }));
-          } else {
-            setItemThumbs((prev) => ({ ...prev, [it.id]: null }));
-            renderPdfFirstThumbnail(file)
-              .then((t) => setItemThumbs((prev) => ({ ...prev, [it.id]: t })))
-              .catch(() => {});
+          const raw = await downloadFromPath(path, cleanName, mime);
+          let file: File = raw;
+          let kind: "pdf" | "image" = isPdf || isDoc ? "pdf" : "image";
+          if (isDoc) {
+            const conv = await fileToPdf(raw);
+            if (!conv) continue;
+            file = conv;
+            kind = "pdf";
           }
+          if (cancelled) return;
+          await registerItem(file, kind);
         }
       } catch {
         /* ignore */
       }
     };
-    // Listen for token table updates (the mobile upload page bumps expires_at after each upload).
-    const mobileChannel = supabase
+    const channel = supabase
       .channel(`manual_mobile_${sessionId}`)
       .on(
         "postgres_changes",
@@ -581,12 +633,13 @@ function Index() {
     const iv = window.setInterval(tick, 4000);
     return () => {
       cancelled = true;
-      supabase.removeChannel(mobileChannel);
+      supabase.removeChannel(channel);
       window.clearInterval(iv);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isManualProject, activeDoc?.id]);
 
-  // Live-updated status via realtime
+  // Live-update status via realtime
   useEffect(() => {
     if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
     const channel = supabase
@@ -594,9 +647,7 @@ function Index() {
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "rti_documents", filter: `id=eq.${activeDoc.id}` },
-        (payload) => {
-          setActiveDoc(payload.new as RtiDocument);
-        },
+        (payload) => setActiveDoc(payload.new as RtiDocument),
       )
       .subscribe();
     return () => {
@@ -606,11 +657,11 @@ function Index() {
 
   useEffect(() => {
     cacheCurrentProject();
-  }, [activeDoc, originals, originalThumbs, items, itemPaths, itemThumbs, timeline, rtiType, loadingDoc]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc, originals, originalThumbs, items, itemPaths, itemThumbs, itemPageCounts, timeline, pdfName, loadingDoc]);
 
   const addFiles = async (files: File[]) => {
     setStatus({ kind: "working", pct: 0, label: "Processing files…" });
-    const next: MergeItem[] = [];
     const rejected: string[] = [];
     for (const f of files) {
       const kind = classify(f);
@@ -618,48 +669,18 @@ function Index() {
         rejected.push(f.name);
         continue;
       }
-      
-      let itemFile = f;
-      let finalKind: "pdf" | "image" = kind === "word" ? "pdf" : kind;
-      
       if (kind === "word") {
-        const processed = await processFileToPdf(f);
-        if (processed) {
-          itemFile = processed;
-        } else {
-          rejected.push(f.name);
-          continue;
-        }
-      }
-
-      next.push({ id: `${itemFile.name}-${itemFile.size}-${crypto.randomUUID()}`, name: itemFile.name, kind: finalKind, file: itemFile });
-    }
-    if (!next.length) {
-      if (rejected.length) setStatus({ kind: "error", message: `Skipped: ${rejected.join(", ")}` });
-      return;
-    }
-    setItems((prev) => [...prev, ...next]);
-    setTimeline((prev) => [
-      ...prev,
-      ...next.map<SavedTimelineEntry>((it) => ({
-        id: `entry-${crypto.randomUUID()}`,
-        type: "item",
-        itemId: it.id,
-      })),
-    ]);
-    for (const it of next) {
-      if (it.kind === "image") {
-        const url = URL.createObjectURL(it.file);
-        objectUrlsRef.current.push(url);
-        setItemThumbs((prev) => ({ ...prev, [it.id]: url }));
+        const p = await fileToPdf(f);
+        if (!p) { rejected.push(f.name); continue; }
+        await registerItem(p, "pdf");
+      } else if (kind === "pdf") {
+        await registerItem(f, "pdf");
       } else {
-        setItemThumbs((prev) => ({ ...prev, [it.id]: null }));
-        renderPdfFirstThumbnail(it.file)
-          .then((t) => setItemThumbs((prev) => ({ ...prev, [it.id]: t })))
-          .catch(() => {});
+        await registerItem(f, "image");
       }
     }
-    setStatus({ kind: "idle" });
+    if (rejected.length) setStatus({ kind: "error", message: `Skipped: ${rejected.join(", ")}` });
+    else setStatus({ kind: "idle" });
   };
 
   const removeEntry = (entryId: string) => {
@@ -681,7 +702,7 @@ function Index() {
     const targetId = replaceForEntryRef.current;
     replaceForEntryRef.current = null;
     if (!fs || !fs[0] || !targetId) return;
-    
+
     setStatus({ kind: "working", pct: 0, label: "Processing replacement…" });
     let f = fs[0];
     let kind = classify(f);
@@ -689,34 +710,14 @@ function Index() {
       setStatus({ kind: "idle" });
       return;
     }
-
     if (kind === "word") {
-      const processed = await processFileToPdf(f);
-      if (!processed) {
-        setStatus({ kind: "idle" });
-        return;
-      }
-      f = processed;
+      const p = await fileToPdf(f);
+      if (!p) { setStatus({ kind: "idle" }); return; }
+      f = p;
       kind = "pdf";
     }
-
-    const it: MergeItem = { id: `${f.name}-${f.size}-${crypto.randomUUID()}`, name: f.name, kind, file: f };
-    setItems((prev) => [...prev, it]);
-    if (kind === "image") {
-      const url = URL.createObjectURL(f);
-      objectUrlsRef.current.push(url);
-      setItemThumbs((prev) => ({ ...prev, [it.id]: url }));
-    } else {
-      setItemThumbs((prev) => ({ ...prev, [it.id]: null }));
-      renderPdfFirstThumbnail(f)
-        .then((t) => setItemThumbs((prev) => ({ ...prev, [it.id]: t })))
-        .catch(() => {});
-    }
-    setTimeline((prev) =>
-      prev.map((e) =>
-        e.id === targetId ? { id: e.id, type: "item", itemId: it.id, rotation: 0 } : e,
-      ),
-    );
+    await registerItem(f, kind, { replaceEntryId: targetId });
+    setStatus({ kind: "idle" });
   };
 
   const onTimelineDragEnd = (e: DragEndEvent) => {
@@ -730,16 +731,7 @@ function Index() {
     });
   };
 
-  const openSaveDialog = () => {
-    if (isManualProject) {
-      confirmSave(manualPdfName);
-    } else {
-      setSaveOpen(true);
-    }
-  };
-
-  const confirmSave = async (pdfName: string) => {
-    setSaveOpen(false);
+  const generateAndSave = async () => {
     if (!activeDoc) return;
     setStatus({ kind: "working", pct: 0, label: "Merging pages…" });
     try {
@@ -760,7 +752,13 @@ function Index() {
           }
           const item = itemById.get(entry.itemId);
           if (!item) return null;
-          return { entryId: entry.id, kind: "item", item, rotation: entry.rotation };
+          return {
+            entryId: entry.id,
+            kind: "item",
+            item,
+            pageIndex: entry.pageIndex ?? 0,
+            rotation: entry.rotation,
+          };
         })
         .filter((x): x is PlanEntry => x !== null);
 
@@ -768,10 +766,8 @@ function Index() {
         setStatus({ kind: "working", pct, label: "Merging pages…" }),
       );
 
-      const fallbackName = activeDoc.id === MANUAL_PROJECT_ID
-        ? activeDoc.original_name
-        : buildFilename(activeDoc.customer_name, rtiType);
-      const rawName = pdfName.trim() || fallbackName;
+      const fallback = activeDoc.original_name.replace(/\.pdf$/i, "") || "Merged_PDF";
+      const rawName = pdfName.trim() || fallback;
       const filename = sanitizeFile(/\.pdf$/i.test(rawName) ? rawName : `${rawName}.pdf`);
       const saved = await savePdfBlob(blob, filename);
       if (!saved) {
@@ -801,17 +797,13 @@ function Index() {
       }));
       const savedPlan: SavedPlan = { items: savedItems, timeline };
       const editedPath = await uploadEdited(activeDoc.id, blob, filename);
-      const newStatus = nextStatus(activeDoc.status);
       const patch: Parameters<typeof updateDocument>[1] = {
         plan_json: savedPlan,
         edited_path: editedPath,
         final_name: filename,
-        status: newStatus,
-        rti_type_selected: activeDoc.rti_type_selected ?? rtiType,
+        status: "completed",
+        deletion_scheduled_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
       };
-      if (newStatus === "completed") {
-        patch.deletion_scheduled_at = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
-      }
       const updated = await updateDocument(activeDoc.id, patch);
       setActiveDoc(updated);
       projectCacheRef.current[activeDoc.id] = {
@@ -821,11 +813,12 @@ function Index() {
         items,
         itemPaths: nextPaths,
         itemThumbs,
+        itemPageCounts,
         timeline,
-        rtiType: activeDoc.rti_type_selected ?? rtiType,
+        pdfName,
         seenMobilePaths: Array.from(seenMobilePathsRef.current),
       };
-      setStatus({ kind: "done", message: `Saved. Status: ${STATUS_TEXT[newStatus]}` });
+      setStatus({ kind: "done", message: `Saved. Status: ${STATUS_TEXT.completed}` });
     } catch (err) {
       setStatus({ kind: "error", message: (err as Error).message });
     }
@@ -864,8 +857,13 @@ function Index() {
   }, []);
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <RtiSidebar activeId={activeDoc?.id ?? null} onSelect={openDocument} onDelete={deleteProject} />
+    <div className="flex h-screen overflow-hidden bg-background">
+      <RtiSidebar
+        activeId={activeDoc?.id ?? null}
+        onSelect={openDocument}
+        onDelete={deleteProject}
+        onManualEdit={() => openManualProject([])}
+      />
 
       <input
         ref={replaceInputRef}
@@ -878,7 +876,7 @@ function Index() {
         }}
       />
 
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 overflow-y-auto">
         <header className="border-b border-border bg-white">
           <div className="mx-auto flex max-w-5xl items-center gap-3 px-6 py-5">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white">
@@ -890,14 +888,6 @@ function Index() {
                 Internal tool · Merge PDFs &amp; images · ACK workflow
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => openManualProject([])}
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-2 text-xs font-medium text-foreground shadow-sm hover:bg-accent"
-            >
-              <FileText className="h-3.5 w-3.5" />
-              Manual Edit
-            </button>
           </div>
         </header>
 
@@ -926,7 +916,6 @@ function Index() {
                   <p className="text-sm font-semibold text-foreground">{activeDoc.customer_name}</p>
                   <p className="text-xs text-muted-foreground">
                     {originals.length} original file{originals.length === 1 ? "" : "s"}
-                    {!isManualProject && ` · ${activeDoc.rti_type_selected ?? "RTI type not chosen yet"}`}
                   </p>
                 </div>
                 {!isManualProject && (
@@ -950,6 +939,22 @@ function Index() {
                   sessionId={isManualProject ? manualSessionIdRef.current : undefined}
                 />
               </div>
+
+              {isManualProject && originals.length === 0 && (
+                <section className="mb-6 rounded-xl border border-border bg-white p-5 shadow-sm">
+                  <h2 className="mb-1 text-sm font-semibold text-foreground">Original PDF</h2>
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    Drop one or more PDFs / images / Word docs to start editing.
+                  </p>
+                  <Dropzone
+                    label="Drop original files here"
+                    hint=".pdf, .jpg, .png, .docx"
+                    multiple
+                    accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    onFiles={openManualProject}
+                  />
+                </section>
+              )}
 
               <section className="rounded-xl border border-border bg-white p-5 shadow-sm">
                 <h2 className="mb-1 text-sm font-semibold text-foreground">Add more files</h2>
@@ -1011,14 +1016,24 @@ function Index() {
                           }
                           const item = itemById.get(entry.itemId);
                           if (!item) return null;
+                          const page = entry.pageIndex ?? 0;
+                          const thumbList = itemThumbs[item.id] ?? [];
+                          const thumb = thumbList[page] ?? null;
+                          const totalPages = itemPageCounts[item.id] ?? 1;
+                          const isLoading =
+                            item.kind === "pdf" && thumbList.length === 0;
+                          const sub =
+                            item.kind === "pdf" && totalPages > 1
+                              ? `P.${page + 1} · #${idx + 1}`
+                              : `#${idx + 1}`;
                           return (
                             <div key={entry.id} className="relative">
                               <PageThumb
                                 id={entry.id}
                                 label={item.name}
-                                sublabel={`#${idx + 1}`}
-                                thumbnail={itemThumbs[item.id] ?? null}
-                                loading={item.kind === "pdf" && itemThumbs[item.id] === null}
+                                sublabel={sub}
+                                thumbnail={thumb}
+                                loading={isLoading}
                                 rotation={entry.rotation}
                                 kind={item.kind}
                                 onDelete={() => removeEntry(entry.id)}
@@ -1035,41 +1050,40 @@ function Index() {
               </section>
 
               <section className="mt-6 rounded-xl border border-border bg-white p-5 shadow-sm">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-                  {isManualProject && (
-                    <div className="flex-1">
-                      <label className="mb-1 block text-xs font-semibold text-foreground">
-                        PDF Name
-                      </label>
-                      <input
-                        type="text"
-                        value={manualPdfName}
-                        onChange={(e) => setManualPdfName(e.target.value)}
-                        placeholder="Filename for generated PDF"
-                        className="w-full max-w-sm rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
-                    </div>
-                  )}
-                  
-                  <button
-                    type="button"
-                    onClick={openSaveDialog}
-                    disabled={!canGenerate}
-                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {status.kind === "working" ? (
-                      <>
-                        <Sparkles className="h-4 w-4 animate-pulse" />
-                        {status.label ?? "Working…"} {status.pct ? `${status.pct}%` : ""}
-                      </>
-                    ) : (
-                      <>
-                        <Save className="h-4 w-4" />
-                        Generate &amp; Save
-                      </>
-                    )}
-                  </button>
+                <div className="mb-4">
+                  <label className="mb-1 block text-xs font-semibold text-foreground">
+                    PDF Name
+                  </label>
+                  <input
+                    type="text"
+                    value={pdfName}
+                    onChange={(e) => setPdfName(e.target.value)}
+                    placeholder={activeDoc.original_name.replace(/\.pdf$/i, "")}
+                    className="w-full max-w-md rounded-md border border-input bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    If empty, the original PDF filename is used.
+                  </p>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={generateAndSave}
+                  disabled={!canGenerate}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {status.kind === "working" ? (
+                    <>
+                      <Sparkles className="h-4 w-4 animate-pulse" />
+                      {status.label ?? "Working…"} {status.pct ? `${status.pct}%` : ""}
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-4 w-4" />
+                      Generate &amp; Save
+                    </>
+                  )}
+                </button>
 
                 {status.kind === "working" && (
                   <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-blue-100">
@@ -1097,19 +1111,6 @@ function Index() {
           )}
         </main>
       </div>
-
-      {saveOpen && activeDoc && (
-        <SaveDialog
-          defaultPdfName=""
-          fallbackPdfName={
-            activeDoc.id === MANUAL_PROJECT_ID
-              ? activeDoc.original_name
-              : buildFilename(activeDoc.customer_name, rtiType)
-          }
-          onCancel={() => setSaveOpen(false)}
-          onConfirm={confirmSave}
-        />
-      )}
     </div>
   );
 }
@@ -1158,52 +1159,3 @@ function useCountdown(target: string) {
   const m = Math.floor((diff % 3_600_000) / 60_000);
   return `${h}h ${m}m`;
 }
-
-function SaveDialog({
-  defaultPdfName,
-  fallbackPdfName,
-  onCancel,
-  onConfirm,
-}: {
-  defaultPdfName: string;
-  fallbackPdfName: string;
-  onCancel: () => void;
-  onConfirm: (pdfName: string) => void;
-}) {
-  const [pdfName, setPdfName] = useState(defaultPdfName);
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-xl border border-border bg-white p-6 shadow-lg">
-        <h3 className="text-base font-semibold text-foreground">Save PDF</h3>
-        <p className="mt-1 text-xs text-muted-foreground">Choose an optional PDF name. If empty, the original filename is used.</p>
-        <label className="mt-4 block text-sm font-medium text-foreground">PDF Name</label>
-        <input
-          value={pdfName}
-          onChange={(e) => setPdfName(e.target.value)}
-          placeholder={fallbackPdfName}
-          className="mt-1 w-full rounded-lg border border-input bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        />
-        <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-xs text-muted-foreground">
-          Filename: <span className="font-medium text-foreground">{pdfName.trim() || fallbackPdfName}</span>
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-medium text-foreground hover:bg-accent"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => onConfirm(pdfName)}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
-          >
-            Generate &amp; Save
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-

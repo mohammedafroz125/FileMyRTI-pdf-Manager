@@ -37,7 +37,7 @@ export type SavedPlanItem = {
 
 export type SavedTimelineEntry =
   | { id: string; type: "original-page"; originalId: string; pageIndex: number; rotation?: number }
-  | { id: string; type: "item"; itemId: string; rotation?: number };
+  | { id: string; type: "item"; itemId: string; pageIndex?: number; rotation?: number };
 
 export type SavedPlan = {
   items: SavedPlanItem[];
@@ -274,11 +274,16 @@ export async function uploadMobileFile(
 ): Promise<string> {
   const lower = file.name.toLowerCase();
   const isPdf = lower.endsWith(".pdf") || file.type === "application/pdf";
+  const isDoc = lower.endsWith(".doc") || lower.endsWith(".docx") || file.type.includes("word");
   const contentType = isPdf
     ? "application/pdf"
-    : lower.endsWith(".png") || file.type === "image/png"
-      ? "image/png"
-      : "image/jpeg";
+    : isDoc
+      ? (lower.endsWith(".docx")
+          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          : "application/msword")
+      : lower.endsWith(".png") || file.type === "image/png"
+        ? "image/png"
+        : "image/jpeg";
   const path = `${docId}/items/${crypto.randomUUID()}-mobile-${slugify(file.name)}`;
   const { error } = await supabase.storage.from(BUCKET).upload(path, file, {
     contentType,

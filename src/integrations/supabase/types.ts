@@ -84,15 +84,7 @@ export type Database = {
           id?: string
           token?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "rti_mobile_tokens_document_id_fkey"
-            columns: ["document_id"]
-            isOneToOne: false
-            referencedRelation: "rti_documents"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       rti_originals: {
         Row: {

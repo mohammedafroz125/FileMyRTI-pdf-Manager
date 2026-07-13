@@ -86,7 +86,7 @@ function MobileUploadPage() {
           <input
             ref={galleryRef}
             type="file"
-            accept="image/*,application/pdf"
+            accept="image/*,application/pdf,.pdf,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             multiple
             className="hidden"
             onChange={(e) => {
@@ -113,7 +113,7 @@ function MobileUploadPage() {
           </button>
 
           <p className="text-center text-xs text-muted-foreground">
-            ACK · Envelope · IPO · Court Fee · Supporting images
+            ACK · Envelope · IPO · Court Fee · PDF · DOC · DOCX · Images
           </p>
 
           {uploading && (
