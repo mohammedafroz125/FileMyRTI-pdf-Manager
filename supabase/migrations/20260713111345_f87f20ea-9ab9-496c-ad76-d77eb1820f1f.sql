@@ -1,0 +1,1 @@
+ALTER TABLE public.rti_mobile_tokens DROP CONSTRAINT IF EXISTS rti_mobile_tokens_document_id_fkey;
