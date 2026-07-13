@@ -716,7 +716,7 @@ function Index() {
       f = p;
       kind = "pdf";
     }
-    await registerItem(f, kind === "word" ? "pdf" : kind, { replaceEntryId: targetId });
+    await registerItem(f, kind, { replaceEntryId: targetId });
     setStatus({ kind: "idle" });
   };
 
