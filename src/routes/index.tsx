@@ -1151,13 +1151,19 @@ function Index() {
                           if (entry.type === "original-page") {
                             const orig = originalsById.get(entry.originalId);
                             const thumbs = originalThumbs[entry.originalId] ?? [];
+                            const totalOrigPages = originalPageCounts[entry.originalId] ?? 0;
+                            const sub =
+                              totalOrigPages > 0
+                                ? `P.${entry.pageIndex + 1}/${totalOrigPages} · #${idx + 1}`
+                                : `P.${entry.pageIndex + 1} · #${idx + 1}`;
                             return (
                               <div key={entry.id} className="relative">
                                 <PageThumb
                                   id={entry.id}
                                   label={orig?.name ?? "Original"}
-                                  sublabel={`P.${entry.pageIndex + 1} · #${idx + 1}`}
+                                  sublabel={sub}
                                   thumbnail={thumbs[entry.pageIndex] ?? null}
+                                  getThumbnail={getOriginalThumb(entry.originalId, entry.pageIndex)}
                                   rotation={entry.rotation}
                                   kind="original"
                                   onDelete={() => removeEntry(entry.id)}
@@ -1173,11 +1179,9 @@ function Index() {
                           const thumbList = itemThumbs[item.id] ?? [];
                           const thumb = thumbList[page] ?? null;
                           const totalPages = itemPageCounts[item.id] ?? 1;
-                          const isLoading =
-                            item.kind === "pdf" && thumbList.length === 0;
                           const sub =
                             item.kind === "pdf" && totalPages > 1
-                              ? `P.${page + 1} · #${idx + 1}`
+                              ? `P.${page + 1}/${totalPages} · #${idx + 1}`
                               : `#${idx + 1}`;
                           return (
                             <div key={entry.id} className="relative">
@@ -1186,7 +1190,9 @@ function Index() {
                                 label={item.name}
                                 sublabel={sub}
                                 thumbnail={thumb}
-                                loading={isLoading}
+                                getThumbnail={
+                                  item.kind === "pdf" ? getItemThumb(item.id, page) : undefined
+                                }
                                 rotation={entry.rotation}
                                 kind={item.kind}
                                 onDelete={() => removeEntry(entry.id)}
