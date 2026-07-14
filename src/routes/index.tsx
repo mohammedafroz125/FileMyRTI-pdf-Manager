@@ -18,6 +18,7 @@ import {
   Trash2,
   Timer,
   Ban,
+  Download,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Dropzone } from "@/components/Dropzone";
@@ -25,7 +26,7 @@ import { PageThumb } from "@/components/PageThumb";
 import { RtiSidebar } from "@/components/RtiSidebar";
 import { QrPhonePanel } from "@/components/QrPhonePanel";
 import { mergeByPlan, type MergeItem, type PlanEntry } from "@/lib/pdf-merge";
-import { renderPdfThumbnails } from "@/lib/pdf-thumbnails";
+import { getPdfPageCount, renderPdfPage, evictPdfDoc } from "@/lib/pdf-thumbnails";
 import {
   deleteDocumentData,
   downloadFromPath,
