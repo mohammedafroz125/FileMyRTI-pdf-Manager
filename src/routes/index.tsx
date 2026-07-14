@@ -379,18 +379,18 @@ function Index() {
     try {
       const origRows = await listOriginals(doc.id);
       const loadedOriginals: { id: string; name: string; file: File }[] = [];
-      const thumbsMap: Record<string, string[]> = {};
+      const origCounts: Record<string, number> = {};
       for (const row of origRows) {
         const f = await downloadFromPath(row.path, row.name, "application/pdf");
         loadedOriginals.push({ id: row.id, name: row.name, file: f });
         try {
-          thumbsMap[row.id] = await renderPdfThumbnails(f);
+          origCounts[row.id] = await getPdfPageCount(`orig-${row.id}`, f);
         } catch {
-          thumbsMap[row.id] = [];
+          origCounts[row.id] = 0;
         }
       }
       setOriginals(loadedOriginals);
-      setOriginalThumbs(thumbsMap);
+      setOriginalPageCounts(origCounts);
 
       const plan = doc.plan_json as SavedPlan | null;
       if (plan) {
@@ -410,11 +410,8 @@ function Index() {
               nextCounts[savedItem.id] = 1;
             } else {
               try {
-                const t = await renderPdfThumbnails(f);
-                nextThumbs[savedItem.id] = t;
-                nextCounts[savedItem.id] = Math.max(1, t.length);
+                nextCounts[savedItem.id] = await getPdfPageCount(`item-${savedItem.id}`, f);
               } catch {
-                nextThumbs[savedItem.id] = [];
                 nextCounts[savedItem.id] = 1;
               }
             }
@@ -453,7 +450,7 @@ function Index() {
       } else {
         const t: SavedTimelineEntry[] = [];
         for (const o of loadedOriginals) {
-          const count = thumbsMap[o.id]?.length ?? 0;
+          const count = origCounts[o.id] ?? 0;
           for (let i = 0; i < count; i++) {
             t.push({
               id: `orig-${o.id}-${i}-${crypto.randomUUID()}`,
