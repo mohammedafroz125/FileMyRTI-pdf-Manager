@@ -1225,24 +1225,51 @@ function Index() {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={generateAndSave}
-                  disabled={!canGenerate}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {status.kind === "working" ? (
-                    <>
-                      <Sparkles className="h-4 w-4 animate-pulse" />
-                      {status.label ?? "Working…"} {status.pct ? `${status.pct}%` : ""}
-                    </>
-                  ) : (
-                    <>
-                      <Save className="h-4 w-4" />
-                      Generate &amp; Save
-                    </>
-                  )}
-                </button>
+                <div className="mb-4">
+                  <label className="mb-1 block text-xs font-semibold text-foreground">
+                    Page Range (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={pageRange}
+                    onChange={(e) => setPageRange(e.target.value)}
+                    placeholder="e.g. 1,3,5-7  (empty = all pages)"
+                    className="w-full max-w-md rounded-md border border-input bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Used by Download. Leave empty to download every page.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={generateAndSave}
+                    disabled={!canGenerate}
+                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {status.kind === "working" ? (
+                      <>
+                        <Sparkles className="h-4 w-4 animate-pulse" />
+                        {status.label ?? "Working…"} {status.pct ? `${status.pct}%` : ""}
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-4 w-4" />
+                        Generate &amp; Save
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadRange}
+                    disabled={!canDownload}
+                    className="inline-flex items-center gap-2 rounded-lg border border-blue-600 bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 shadow-sm transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    Download
+                  </button>
+                </div>
 
                 {status.kind === "working" && (
                   <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-blue-100">
