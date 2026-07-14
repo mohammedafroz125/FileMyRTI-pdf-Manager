@@ -79,6 +79,7 @@ type ProjectCacheEntry = {
   activeDoc: RtiDocument;
   originals: { id: string; name: string; file: File }[];
   originalThumbs: Record<string, string[]>;
+  originalPageCounts: Record<string, number>;
   items: MergeItem[];
   itemPaths: Record<string, string>;
   itemThumbs: Record<string, string[]>;
