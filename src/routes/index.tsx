@@ -524,19 +524,19 @@ function Index() {
         return;
       }
       const loadedOriginals: { id: string; name: string; file: File }[] = [];
-      const thumbsMap: Record<string, string[]> = {};
+      const countsMap: Record<string, number> = {};
       for (const file of pdfs) {
         const id = `manual-${crypto.randomUUID()}`;
         loadedOriginals.push({ id, name: file.name, file });
         try {
-          thumbsMap[id] = await renderPdfThumbnails(file);
+          countsMap[id] = await getPdfPageCount(`orig-${id}`, file);
         } catch {
-          thumbsMap[id] = [];
+          countsMap[id] = 0;
         }
       }
       const timelineEntries: SavedTimelineEntry[] = [];
       for (const o of loadedOriginals) {
-        const count = thumbsMap[o.id]?.length ?? 0;
+        const count = countsMap[o.id] ?? 0;
         for (let i = 0; i < count; i++) {
           timelineEntries.push({
             id: `manual-orig-${o.id}-${i}-${crypto.randomUUID()}`,
@@ -547,7 +547,7 @@ function Index() {
         }
       }
       setOriginals(loadedOriginals);
-      setOriginalThumbs(thumbsMap);
+      setOriginalPageCounts(countsMap);
       setTimeline(timelineEntries);
       setStatus({ kind: "idle" });
     } catch (err) {
