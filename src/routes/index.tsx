@@ -923,10 +923,90 @@ function Index() {
 
   const canGenerate = timeline.length > 0 && status.kind !== "working" && !loadingDoc && !!activeDoc;
 
+  // Parse "1,2,3", "5-8", "1,3,5-7" → 0-based timeline indices (unique, ordered).
+  const parsePageRange = (input: string, total: number): number[] | null => {
+    if (!input.trim()) return Array.from({ length: total }, (_, i) => i);
+    const out: number[] = [];
+    const seen = new Set<number>();
+    for (const raw of input.split(",")) {
+      const p = raw.trim();
+      if (!p) continue;
+      if (p.includes("-")) {
+        const [a, b] = p.split("-").map((s) => parseInt(s.trim(), 10));
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+        const lo = Math.max(1, Math.min(a, b));
+        const hi = Math.min(total, Math.max(a, b));
+        for (let i = lo; i <= hi; i++) {
+          if (!seen.has(i)) { seen.add(i); out.push(i - 1); }
+        }
+      } else {
+        const n = parseInt(p, 10);
+        if (!Number.isFinite(n)) return null;
+        if (n >= 1 && n <= total && !seen.has(n)) { seen.add(n); out.push(n - 1); }
+      }
+    }
+    return out;
+  };
+
+  const downloadRange = async () => {
+    if (!activeDoc) return;
+    const indices = parsePageRange(pageRange, timeline.length);
+    if (!indices || indices.length === 0) {
+      setStatus({ kind: "error", message: "Enter a valid page range (e.g. 1,3,5-7)" });
+      return;
+    }
+    setStatus({ kind: "working", pct: 0, label: "Preparing pages…" });
+    try {
+      const subset = indices.map((i) => timeline[i]).filter(Boolean);
+      const originalFiles: Record<string, File> = {};
+      for (const o of originals) originalFiles[o.id] = o.file;
+      const plan: PlanEntry[] = subset
+        .map<PlanEntry | null>((entry) => {
+          if (entry.type === "original-page") {
+            if (!originalFiles[entry.originalId]) return null;
+            return {
+              entryId: entry.id,
+              kind: "original-page",
+              originalId: entry.originalId,
+              pageIndex: entry.pageIndex,
+              rotation: entry.rotation,
+            };
+          }
+          const item = itemById.get(entry.itemId);
+          if (!item) return null;
+          return {
+            entryId: entry.id,
+            kind: "item",
+            item,
+            pageIndex: entry.pageIndex ?? 0,
+            rotation: entry.rotation,
+          };
+        })
+        .filter((x): x is PlanEntry => x !== null);
+      const blob = await mergeByPlan(originalFiles, plan, (pct) =>
+        setStatus({ kind: "working", pct, label: "Merging pages…" }),
+      );
+      const fallback = activeDoc.original_name.replace(/\.pdf$/i, "") || "Merged_PDF";
+      const rawName = pdfName.trim() || fallback;
+      const base = /\.pdf$/i.test(rawName) ? rawName.replace(/\.pdf$/i, "") : rawName;
+      const suffix = pageRange.trim() ? `_p${pageRange.replace(/\s+/g, "")}` : "";
+      downloadBlob(blob, sanitizeFile(`${base}${suffix}.pdf`));
+      setStatus({ kind: "done", message: "Downloaded" });
+    } catch (err) {
+      setStatus({ kind: "error", message: (err as Error).message });
+    }
+  };
+
+  const canDownload = timeline.length > 0 && status.kind !== "working" && !loadingDoc && !!activeDoc;
+
+  // Evict cached pdfjs documents on unmount.
   useEffect(() => {
     return () => {
       for (const u of objectUrlsRef.current) URL.revokeObjectURL(u);
+      for (const o of originals) evictPdfDoc(`orig-${o.id}`);
+      for (const it of items) evictPdfDoc(`item-${it.id}`);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
