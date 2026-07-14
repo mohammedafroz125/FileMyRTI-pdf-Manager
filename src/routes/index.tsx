@@ -181,12 +181,14 @@ function Index() {
   const [activeDoc, setActiveDoc] = useState<RtiDocument | null>(null);
   const [originals, setOriginals] = useState<{ id: string; name: string; file: File }[]>([]);
   const [originalThumbs, setOriginalThumbs] = useState<Record<string, string[]>>({});
+  const [originalPageCounts, setOriginalPageCounts] = useState<Record<string, number>>({});
   const [items, setItems] = useState<MergeItem[]>([]);
   const [itemPaths, setItemPaths] = useState<Record<string, string>>({});
   const [itemThumbs, setItemThumbs] = useState<Record<string, string[]>>({});
   const [itemPageCounts, setItemPageCounts] = useState<Record<string, number>>({});
   const [timeline, setTimeline] = useState<SavedTimelineEntry[]>([]);
   const [pdfName, setPdfName] = useState<string>("");
+  const [pageRange, setPageRange] = useState<string>("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [loadingDoc, setLoadingDoc] = useState(false);
   const objectUrlsRef = useRef<string[]>([]);
@@ -194,6 +196,7 @@ function Index() {
   const projectCacheRef = useRef<Record<string, ProjectCacheEntry>>({});
   const replaceForEntryRef = useRef<string | null>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const persistTimerRef = useRef<number | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const manualSessionIdRef = useRef<string>(crypto.randomUUID());
@@ -218,6 +221,7 @@ function Index() {
       activeDoc,
       originals,
       originalThumbs,
+      originalPageCounts,
       items,
       itemPaths,
       itemThumbs,
@@ -232,6 +236,7 @@ function Index() {
     setActiveDoc(cached.activeDoc);
     setOriginals(cached.originals);
     setOriginalThumbs(cached.originalThumbs);
+    setOriginalPageCounts(cached.originalPageCounts);
     setItems(cached.items);
     setItemPaths(cached.itemPaths);
     setItemThumbs(cached.itemThumbs);
@@ -245,14 +250,49 @@ function Index() {
   const resetLocalState = () => {
     setOriginals([]);
     setOriginalThumbs({});
+    setOriginalPageCounts({});
     setItems([]);
     setItemPaths({});
     setItemThumbs({});
     setItemPageCounts({});
     setTimeline([]);
     setPdfName("");
+    setPageRange("");
     setStatus({ kind: "idle" });
     seenMobilePathsRef.current = new Set();
+  };
+
+  // Lazy thumbnail resolver — renders and caches a single page on demand.
+  const getOriginalThumb = (originalId: string, pageIndex: number) => async (): Promise<string | null> => {
+    const cached = originalThumbs[originalId]?.[pageIndex];
+    if (cached) return cached;
+    const orig = originalsById.get(originalId);
+    if (!orig) return null;
+    const url = await renderPdfPage(`orig-${originalId}`, orig.file, pageIndex);
+    if (url) {
+      setOriginalThumbs((prev) => {
+        const arr = prev[originalId] ? [...prev[originalId]] : [];
+        arr[pageIndex] = url;
+        return { ...prev, [originalId]: arr };
+      });
+    }
+    return url;
+  };
+
+  const getItemThumb = (itemId: string, pageIndex: number) => async (): Promise<string | null> => {
+    const cached = itemThumbs[itemId]?.[pageIndex];
+    if (cached) return cached;
+    const it = itemById.get(itemId);
+    if (!it || it.kind !== "pdf") return null;
+    const url = await renderPdfPage(`item-${itemId}`, it.file, pageIndex);
+    if (url) {
+      setItemThumbs((prev) => {
+        const arr = prev[itemId] ? [...prev[itemId]] : [];
+        arr[pageIndex] = url;
+        return { ...prev, [itemId]: arr };
+      });
+    }
+    return url;
   };
 
   // ---------- Add PDF/image item helper (expands PDF into per-page timeline entries) ----------
