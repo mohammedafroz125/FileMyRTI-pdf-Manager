@@ -695,7 +695,42 @@ function Index() {
   useEffect(() => {
     cacheCurrentProject();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeDoc, originals, originalThumbs, items, itemPaths, itemThumbs, itemPageCounts, timeline, pdfName, loadingDoc]);
+  }, [activeDoc, originals, originalThumbs, originalPageCounts, items, itemPaths, itemThumbs, itemPageCounts, timeline, pdfName, loadingDoc]);
+
+  // ---- Auto-persist plan for real projects (debounced) ----
+  const persistPlan = async () => {
+    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
+    try {
+      const nextPaths = { ...itemPaths };
+      let changed = false;
+      for (const it of items) {
+        if (!nextPaths[it.id]) {
+          nextPaths[it.id] = await uploadItemFile(activeDoc.id, it.file, it.kind);
+          changed = true;
+        }
+      }
+      if (changed) setItemPaths(nextPaths);
+      const savedItems: SavedPlanItem[] = items
+        .filter((it) => !!nextPaths[it.id])
+        .map((it) => ({ id: it.id, name: it.name, kind: it.kind, path: nextPaths[it.id] }));
+      const savedPlan: SavedPlan = { items: savedItems, timeline };
+      await updateDocument(activeDoc.id, { plan_json: savedPlan });
+    } catch (e) {
+      console.error("Auto-persist failed", e);
+    }
+  };
+
+  useEffect(() => {
+    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID || loadingDoc) return;
+    if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = window.setTimeout(() => {
+      void persistPlan();
+    }, 800);
+    return () => {
+      if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, timeline, activeDoc?.id, loadingDoc]);
 
   const addFiles = async (files: File[]) => {
     setStatus({ kind: "working", pct: 0, label: "Processing files…" });
