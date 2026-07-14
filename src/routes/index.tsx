@@ -18,6 +18,7 @@ import {
   Trash2,
   Timer,
   Ban,
+  Download,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Dropzone } from "@/components/Dropzone";
@@ -25,7 +26,7 @@ import { PageThumb } from "@/components/PageThumb";
 import { RtiSidebar } from "@/components/RtiSidebar";
 import { QrPhonePanel } from "@/components/QrPhonePanel";
 import { mergeByPlan, type MergeItem, type PlanEntry } from "@/lib/pdf-merge";
-import { renderPdfThumbnails } from "@/lib/pdf-thumbnails";
+import { getPdfPageCount, renderPdfPage, evictPdfDoc } from "@/lib/pdf-thumbnails";
 import {
   deleteDocumentData,
   downloadFromPath,
@@ -78,6 +79,7 @@ type ProjectCacheEntry = {
   activeDoc: RtiDocument;
   originals: { id: string; name: string; file: File }[];
   originalThumbs: Record<string, string[]>;
+  originalPageCounts: Record<string, number>;
   items: MergeItem[];
   itemPaths: Record<string, string>;
   itemThumbs: Record<string, string[]>;
@@ -179,12 +181,14 @@ function Index() {
   const [activeDoc, setActiveDoc] = useState<RtiDocument | null>(null);
   const [originals, setOriginals] = useState<{ id: string; name: string; file: File }[]>([]);
   const [originalThumbs, setOriginalThumbs] = useState<Record<string, string[]>>({});
+  const [originalPageCounts, setOriginalPageCounts] = useState<Record<string, number>>({});
   const [items, setItems] = useState<MergeItem[]>([]);
   const [itemPaths, setItemPaths] = useState<Record<string, string>>({});
   const [itemThumbs, setItemThumbs] = useState<Record<string, string[]>>({});
   const [itemPageCounts, setItemPageCounts] = useState<Record<string, number>>({});
   const [timeline, setTimeline] = useState<SavedTimelineEntry[]>([]);
   const [pdfName, setPdfName] = useState<string>("");
+  const [pageRange, setPageRange] = useState<string>("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [loadingDoc, setLoadingDoc] = useState(false);
   const objectUrlsRef = useRef<string[]>([]);
@@ -192,6 +196,7 @@ function Index() {
   const projectCacheRef = useRef<Record<string, ProjectCacheEntry>>({});
   const replaceForEntryRef = useRef<string | null>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const persistTimerRef = useRef<number | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const manualSessionIdRef = useRef<string>(crypto.randomUUID());
@@ -216,6 +221,7 @@ function Index() {
       activeDoc,
       originals,
       originalThumbs,
+      originalPageCounts,
       items,
       itemPaths,
       itemThumbs,
@@ -230,6 +236,7 @@ function Index() {
     setActiveDoc(cached.activeDoc);
     setOriginals(cached.originals);
     setOriginalThumbs(cached.originalThumbs);
+    setOriginalPageCounts(cached.originalPageCounts);
     setItems(cached.items);
     setItemPaths(cached.itemPaths);
     setItemThumbs(cached.itemThumbs);
@@ -243,14 +250,49 @@ function Index() {
   const resetLocalState = () => {
     setOriginals([]);
     setOriginalThumbs({});
+    setOriginalPageCounts({});
     setItems([]);
     setItemPaths({});
     setItemThumbs({});
     setItemPageCounts({});
     setTimeline([]);
     setPdfName("");
+    setPageRange("");
     setStatus({ kind: "idle" });
     seenMobilePathsRef.current = new Set();
+  };
+
+  // Lazy thumbnail resolver — renders and caches a single page on demand.
+  const getOriginalThumb = (originalId: string, pageIndex: number) => async (): Promise<string | null> => {
+    const cached = originalThumbs[originalId]?.[pageIndex];
+    if (cached) return cached;
+    const orig = originalsById.get(originalId);
+    if (!orig) return null;
+    const url = await renderPdfPage(`orig-${originalId}`, orig.file, pageIndex);
+    if (url) {
+      setOriginalThumbs((prev) => {
+        const arr = prev[originalId] ? [...prev[originalId]] : [];
+        arr[pageIndex] = url;
+        return { ...prev, [originalId]: arr };
+      });
+    }
+    return url;
+  };
+
+  const getItemThumb = (itemId: string, pageIndex: number) => async (): Promise<string | null> => {
+    const cached = itemThumbs[itemId]?.[pageIndex];
+    if (cached) return cached;
+    const it = itemById.get(itemId);
+    if (!it || it.kind !== "pdf") return null;
+    const url = await renderPdfPage(`item-${itemId}`, it.file, pageIndex);
+    if (url) {
+      setItemThumbs((prev) => {
+        const arr = prev[itemId] ? [...prev[itemId]] : [];
+        arr[pageIndex] = url;
+        return { ...prev, [itemId]: arr };
+      });
+    }
+    return url;
   };
 
   // ---------- Add PDF/image item helper (expands PDF into per-page timeline entries) ----------
@@ -288,15 +330,13 @@ function Index() {
       return;
     }
 
-    // PDF item: render all pages, push one timeline entry per page
-    let thumbs: string[] = [];
+    // PDF item: fetch page count only; thumbnails render lazily per page.
+    let pageCount = 1;
     try {
-      thumbs = await renderPdfThumbnails(file);
+      pageCount = await getPdfPageCount(`item-${it.id}`, file);
     } catch (e) {
-      console.error("PDF thumb render failed", e);
+      console.error("PDF page-count failed", e);
     }
-    const pageCount = Math.max(1, thumbs.length);
-    setItemThumbs((prev) => ({ ...prev, [it.id]: thumbs }));
     setItemPageCounts((prev) => ({ ...prev, [it.id]: pageCount }));
 
     const newEntries: SavedTimelineEntry[] = Array.from({ length: pageCount }, (_, i) => ({
@@ -339,18 +379,18 @@ function Index() {
     try {
       const origRows = await listOriginals(doc.id);
       const loadedOriginals: { id: string; name: string; file: File }[] = [];
-      const thumbsMap: Record<string, string[]> = {};
+      const origCounts: Record<string, number> = {};
       for (const row of origRows) {
         const f = await downloadFromPath(row.path, row.name, "application/pdf");
         loadedOriginals.push({ id: row.id, name: row.name, file: f });
         try {
-          thumbsMap[row.id] = await renderPdfThumbnails(f);
+          origCounts[row.id] = await getPdfPageCount(`orig-${row.id}`, f);
         } catch {
-          thumbsMap[row.id] = [];
+          origCounts[row.id] = 0;
         }
       }
       setOriginals(loadedOriginals);
-      setOriginalThumbs(thumbsMap);
+      setOriginalPageCounts(origCounts);
 
       const plan = doc.plan_json as SavedPlan | null;
       if (plan) {
@@ -370,11 +410,8 @@ function Index() {
               nextCounts[savedItem.id] = 1;
             } else {
               try {
-                const t = await renderPdfThumbnails(f);
-                nextThumbs[savedItem.id] = t;
-                nextCounts[savedItem.id] = Math.max(1, t.length);
+                nextCounts[savedItem.id] = await getPdfPageCount(`item-${savedItem.id}`, f);
               } catch {
-                nextThumbs[savedItem.id] = [];
                 nextCounts[savedItem.id] = 1;
               }
             }
@@ -413,7 +450,7 @@ function Index() {
       } else {
         const t: SavedTimelineEntry[] = [];
         for (const o of loadedOriginals) {
-          const count = thumbsMap[o.id]?.length ?? 0;
+          const count = origCounts[o.id] ?? 0;
           for (let i = 0; i < count; i++) {
             t.push({
               id: `orig-${o.id}-${i}-${crypto.randomUUID()}`,
@@ -487,19 +524,19 @@ function Index() {
         return;
       }
       const loadedOriginals: { id: string; name: string; file: File }[] = [];
-      const thumbsMap: Record<string, string[]> = {};
+      const countsMap: Record<string, number> = {};
       for (const file of pdfs) {
         const id = `manual-${crypto.randomUUID()}`;
         loadedOriginals.push({ id, name: file.name, file });
         try {
-          thumbsMap[id] = await renderPdfThumbnails(file);
+          countsMap[id] = await getPdfPageCount(`orig-${id}`, file);
         } catch {
-          thumbsMap[id] = [];
+          countsMap[id] = 0;
         }
       }
       const timelineEntries: SavedTimelineEntry[] = [];
       for (const o of loadedOriginals) {
-        const count = thumbsMap[o.id]?.length ?? 0;
+        const count = countsMap[o.id] ?? 0;
         for (let i = 0; i < count; i++) {
           timelineEntries.push({
             id: `manual-orig-${o.id}-${i}-${crypto.randomUUID()}`,
@@ -510,7 +547,7 @@ function Index() {
         }
       }
       setOriginals(loadedOriginals);
-      setOriginalThumbs(thumbsMap);
+      setOriginalPageCounts(countsMap);
       setTimeline(timelineEntries);
       setStatus({ kind: "idle" });
     } catch (err) {
@@ -658,7 +695,42 @@ function Index() {
   useEffect(() => {
     cacheCurrentProject();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeDoc, originals, originalThumbs, items, itemPaths, itemThumbs, itemPageCounts, timeline, pdfName, loadingDoc]);
+  }, [activeDoc, originals, originalThumbs, originalPageCounts, items, itemPaths, itemThumbs, itemPageCounts, timeline, pdfName, loadingDoc]);
+
+  // ---- Auto-persist plan for real projects (debounced) ----
+  const persistPlan = async () => {
+    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
+    try {
+      const nextPaths = { ...itemPaths };
+      let changed = false;
+      for (const it of items) {
+        if (!nextPaths[it.id]) {
+          nextPaths[it.id] = await uploadItemFile(activeDoc.id, it.file, it.kind);
+          changed = true;
+        }
+      }
+      if (changed) setItemPaths(nextPaths);
+      const savedItems: SavedPlanItem[] = items
+        .filter((it) => !!nextPaths[it.id])
+        .map((it) => ({ id: it.id, name: it.name, kind: it.kind, path: nextPaths[it.id] }));
+      const savedPlan: SavedPlan = { items: savedItems, timeline };
+      await updateDocument(activeDoc.id, { plan_json: savedPlan });
+    } catch (e) {
+      console.error("Auto-persist failed", e);
+    }
+  };
+
+  useEffect(() => {
+    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID || loadingDoc) return;
+    if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = window.setTimeout(() => {
+      void persistPlan();
+    }, 800);
+    return () => {
+      if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, timeline, activeDoc?.id, loadingDoc]);
 
   const addFiles = async (files: File[]) => {
     setStatus({ kind: "working", pct: 0, label: "Processing files…" });
@@ -810,6 +882,7 @@ function Index() {
         activeDoc: updated,
         originals,
         originalThumbs,
+        originalPageCounts,
         items,
         itemPaths: nextPaths,
         itemThumbs,
@@ -850,10 +923,90 @@ function Index() {
 
   const canGenerate = timeline.length > 0 && status.kind !== "working" && !loadingDoc && !!activeDoc;
 
+  // Parse "1,2,3", "5-8", "1,3,5-7" → 0-based timeline indices (unique, ordered).
+  const parsePageRange = (input: string, total: number): number[] | null => {
+    if (!input.trim()) return Array.from({ length: total }, (_, i) => i);
+    const out: number[] = [];
+    const seen = new Set<number>();
+    for (const raw of input.split(",")) {
+      const p = raw.trim();
+      if (!p) continue;
+      if (p.includes("-")) {
+        const [a, b] = p.split("-").map((s) => parseInt(s.trim(), 10));
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+        const lo = Math.max(1, Math.min(a, b));
+        const hi = Math.min(total, Math.max(a, b));
+        for (let i = lo; i <= hi; i++) {
+          if (!seen.has(i)) { seen.add(i); out.push(i - 1); }
+        }
+      } else {
+        const n = parseInt(p, 10);
+        if (!Number.isFinite(n)) return null;
+        if (n >= 1 && n <= total && !seen.has(n)) { seen.add(n); out.push(n - 1); }
+      }
+    }
+    return out;
+  };
+
+  const downloadRange = async () => {
+    if (!activeDoc) return;
+    const indices = parsePageRange(pageRange, timeline.length);
+    if (!indices || indices.length === 0) {
+      setStatus({ kind: "error", message: "Enter a valid page range (e.g. 1,3,5-7)" });
+      return;
+    }
+    setStatus({ kind: "working", pct: 0, label: "Preparing pages…" });
+    try {
+      const subset = indices.map((i) => timeline[i]).filter(Boolean);
+      const originalFiles: Record<string, File> = {};
+      for (const o of originals) originalFiles[o.id] = o.file;
+      const plan: PlanEntry[] = subset
+        .map<PlanEntry | null>((entry) => {
+          if (entry.type === "original-page") {
+            if (!originalFiles[entry.originalId]) return null;
+            return {
+              entryId: entry.id,
+              kind: "original-page",
+              originalId: entry.originalId,
+              pageIndex: entry.pageIndex,
+              rotation: entry.rotation,
+            };
+          }
+          const item = itemById.get(entry.itemId);
+          if (!item) return null;
+          return {
+            entryId: entry.id,
+            kind: "item",
+            item,
+            pageIndex: entry.pageIndex ?? 0,
+            rotation: entry.rotation,
+          };
+        })
+        .filter((x): x is PlanEntry => x !== null);
+      const blob = await mergeByPlan(originalFiles, plan, (pct) =>
+        setStatus({ kind: "working", pct, label: "Merging pages…" }),
+      );
+      const fallback = activeDoc.original_name.replace(/\.pdf$/i, "") || "Merged_PDF";
+      const rawName = pdfName.trim() || fallback;
+      const base = /\.pdf$/i.test(rawName) ? rawName.replace(/\.pdf$/i, "") : rawName;
+      const suffix = pageRange.trim() ? `_p${pageRange.replace(/\s+/g, "")}` : "";
+      downloadBlob(blob, sanitizeFile(`${base}${suffix}.pdf`));
+      setStatus({ kind: "done", message: "Downloaded" });
+    } catch (err) {
+      setStatus({ kind: "error", message: (err as Error).message });
+    }
+  };
+
+  const canDownload = timeline.length > 0 && status.kind !== "working" && !loadingDoc && !!activeDoc;
+
+  // Evict cached pdfjs documents on unmount.
   useEffect(() => {
     return () => {
       for (const u of objectUrlsRef.current) URL.revokeObjectURL(u);
+      for (const o of originals) evictPdfDoc(`orig-${o.id}`);
+      for (const it of items) evictPdfDoc(`item-${it.id}`);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -998,13 +1151,19 @@ function Index() {
                           if (entry.type === "original-page") {
                             const orig = originalsById.get(entry.originalId);
                             const thumbs = originalThumbs[entry.originalId] ?? [];
+                            const totalOrigPages = originalPageCounts[entry.originalId] ?? 0;
+                            const sub =
+                              totalOrigPages > 0
+                                ? `P.${entry.pageIndex + 1}/${totalOrigPages} · #${idx + 1}`
+                                : `P.${entry.pageIndex + 1} · #${idx + 1}`;
                             return (
                               <div key={entry.id} className="relative">
                                 <PageThumb
                                   id={entry.id}
                                   label={orig?.name ?? "Original"}
-                                  sublabel={`P.${entry.pageIndex + 1} · #${idx + 1}`}
+                                  sublabel={sub}
                                   thumbnail={thumbs[entry.pageIndex] ?? null}
+                                  getThumbnail={getOriginalThumb(entry.originalId, entry.pageIndex)}
                                   rotation={entry.rotation}
                                   kind="original"
                                   onDelete={() => removeEntry(entry.id)}
@@ -1020,11 +1179,9 @@ function Index() {
                           const thumbList = itemThumbs[item.id] ?? [];
                           const thumb = thumbList[page] ?? null;
                           const totalPages = itemPageCounts[item.id] ?? 1;
-                          const isLoading =
-                            item.kind === "pdf" && thumbList.length === 0;
                           const sub =
                             item.kind === "pdf" && totalPages > 1
-                              ? `P.${page + 1} · #${idx + 1}`
+                              ? `P.${page + 1}/${totalPages} · #${idx + 1}`
                               : `#${idx + 1}`;
                           return (
                             <div key={entry.id} className="relative">
@@ -1033,7 +1190,9 @@ function Index() {
                                 label={item.name}
                                 sublabel={sub}
                                 thumbnail={thumb}
-                                loading={isLoading}
+                                getThumbnail={
+                                  item.kind === "pdf" ? getItemThumb(item.id, page) : undefined
+                                }
                                 rotation={entry.rotation}
                                 kind={item.kind}
                                 onDelete={() => removeEntry(entry.id)}
@@ -1066,24 +1225,51 @@ function Index() {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={generateAndSave}
-                  disabled={!canGenerate}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {status.kind === "working" ? (
-                    <>
-                      <Sparkles className="h-4 w-4 animate-pulse" />
-                      {status.label ?? "Working…"} {status.pct ? `${status.pct}%` : ""}
-                    </>
-                  ) : (
-                    <>
-                      <Save className="h-4 w-4" />
-                      Generate &amp; Save
-                    </>
-                  )}
-                </button>
+                <div className="mb-4">
+                  <label className="mb-1 block text-xs font-semibold text-foreground">
+                    Page Range (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={pageRange}
+                    onChange={(e) => setPageRange(e.target.value)}
+                    placeholder="e.g. 1,3,5-7  (empty = all pages)"
+                    className="w-full max-w-md rounded-md border border-input bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Used by Download. Leave empty to download every page.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={generateAndSave}
+                    disabled={!canGenerate}
+                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {status.kind === "working" ? (
+                      <>
+                        <Sparkles className="h-4 w-4 animate-pulse" />
+                        {status.label ?? "Working…"} {status.pct ? `${status.pct}%` : ""}
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-4 w-4" />
+                        Generate &amp; Save
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadRange}
+                    disabled={!canDownload}
+                    className="inline-flex items-center gap-2 rounded-lg border border-blue-600 bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 shadow-sm transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    Download
+                  </button>
+                </div>
 
                 {status.kind === "working" && (
                   <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-blue-100">

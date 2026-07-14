@@ -10,12 +10,14 @@ type Props = {
   loading?: boolean;
   kind: "original" | "pdf" | "image";
   rotation?: number;
+  /** Lazy loader; called once when the thumb enters viewport if `thumbnail` is null. */
+  getThumbnail?: () => Promise<string | null>;
   onDelete?: () => void;
   onRotate?: () => void;
   onReplace?: () => void;
 };
 
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 export const PageThumb = React.memo(function PageThumb({
   id,
@@ -25,6 +27,7 @@ export const PageThumb = React.memo(function PageThumb({
   loading,
   kind,
   rotation = 0,
+  getThumbnail,
   onDelete,
   onRotate,
   onReplace,
@@ -49,28 +52,74 @@ export const PageThumb = React.memo(function PageThumb({
   const badgeText = kind === "original" ? "Original" : kind === "pdf" ? "PDF" : "Image";
   const FallbackIcon = kind === "image" ? ImageIcon : FileText;
 
+  // Lazy-load thumbnail on first visibility.
+  const outerRef = useRef<HTMLDivElement | null>(null);
+  const [lazyThumb, setLazyThumb] = useState<string | null>(null);
+  const [lazyLoading, setLazyLoading] = useState(false);
+  const requestedRef = useRef(false);
+
+  useEffect(() => {
+    if (thumbnail || !getThumbnail || requestedRef.current) return;
+    const el = outerRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      // Fallback: load immediately.
+      requestedRef.current = true;
+      setLazyLoading(true);
+      getThumbnail()
+        .then((u) => setLazyThumb(u))
+        .finally(() => setLazyLoading(false));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting && !requestedRef.current) {
+            requestedRef.current = true;
+            setLazyLoading(true);
+            getThumbnail()
+              .then((u) => setLazyThumb(u))
+              .finally(() => setLazyLoading(false));
+            io.disconnect();
+            break;
+          }
+        }
+      },
+      { rootMargin: "300px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [thumbnail, getThumbnail]);
+
+  const shownThumb = thumbnail ?? lazyThumb;
+  const shownLoading = loading || (lazyLoading && !shownThumb);
+
   const stop = (e: React.SyntheticEvent) => {
     e.stopPropagation();
   };
 
+  const setRefs = (node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    outerRef.current = node;
+  };
+
   return (
     <div
-      ref={setNodeRef}
+      ref={setRefs}
       style={style}
       {...attributes}
       {...listeners}
       className="group relative flex cursor-grab touch-none flex-col overflow-hidden rounded-lg border border-border bg-white shadow-sm hover:border-blue-400 hover:shadow-md active:cursor-grabbing"
     >
       <div className="relative flex aspect-[3/4] items-center justify-center overflow-hidden bg-slate-50">
-        {thumbnail ? (
+        {shownThumb ? (
           <img
-            src={thumbnail}
+            src={shownThumb}
             alt={label}
             loading="lazy"
             className="h-full w-full object-contain transition-transform"
             style={{ transform: `rotate(${rotation}deg)` }}
           />
-        ) : loading ? (
+        ) : shownLoading ? (
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
         ) : (
           <FallbackIcon className="h-8 w-8 text-muted-foreground" />
