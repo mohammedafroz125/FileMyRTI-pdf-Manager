@@ -847,6 +847,7 @@ function Index() {
         activeDoc: updated,
         originals,
         originalThumbs,
+        originalPageCounts,
         items,
         itemPaths: nextPaths,
         itemThumbs,
