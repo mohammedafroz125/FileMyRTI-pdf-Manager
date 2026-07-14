@@ -330,15 +330,13 @@ function Index() {
       return;
     }
 
-    // PDF item: render all pages, push one timeline entry per page
-    let thumbs: string[] = [];
+    // PDF item: fetch page count only; thumbnails render lazily per page.
+    let pageCount = 1;
     try {
-      thumbs = await renderPdfThumbnails(file);
+      pageCount = await getPdfPageCount(`item-${it.id}`, file);
     } catch (e) {
-      console.error("PDF thumb render failed", e);
+      console.error("PDF page-count failed", e);
     }
-    const pageCount = Math.max(1, thumbs.length);
-    setItemThumbs((prev) => ({ ...prev, [it.id]: thumbs }));
     setItemPageCounts((prev) => ({ ...prev, [it.id]: pageCount }));
 
     const newEntries: SavedTimelineEntry[] = Array.from({ length: pageCount }, (_, i) => ({
