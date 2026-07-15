@@ -216,6 +216,11 @@ function Index() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const manualSessionIdRef = useRef<string>(crypto.randomUUID());
+  const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  const draftLoadingRef = useRef(false);
+  const draftSaveTimerRef = useRef<number | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
+
 
   const originalsById = useMemo(() => {
     const m = new Map<string, { name: string; file: File }>();
