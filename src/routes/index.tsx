@@ -86,7 +86,9 @@ const STATUS_TEXT: Record<RtiStatus, string> = {
   completed: "🟢 Successful",
 };
 
-const MANUAL_PROJECT_ID = "manual-edit";
+const MANUAL_PROJECT_ID = "manual-edit"; // legacy
+const DRAFT_PREFIX = "draft:";
+const isDraftId = (id: string | null | undefined) => !!id && id.startsWith(DRAFT_PREFIX);
 
 type ProjectCacheEntry = {
   activeDoc: RtiDocument;
@@ -110,6 +112,7 @@ function classify(file: File): "pdf" | "image" | "word" | null {
     return "word";
   return null;
 }
+
 
 function sanitizeFile(name: string): string {
   return name.replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim();
