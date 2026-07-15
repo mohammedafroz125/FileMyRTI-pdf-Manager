@@ -501,36 +501,70 @@ function Index() {
     }
   };
 
-  const openManualProject = async (files: File[]) => {
-    if (isDraftId(activeDoc?.id) && files.length === 0) {
-      // already open, just re-focus
-      return;
+  const refreshDrafts = async () => {
+    try {
+      const list = await listDrafts();
+      setDrafts(list);
+    } catch (e) {
+      console.error(e);
     }
-    if (isDraftId(activeDoc?.id)) {
-      if (!confirm("Discard current Manual Edit?")) return;
-    }
+  };
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        await reconcileIndex();
+      } catch {
+        /* ignore */
+      }
+      await refreshDrafts();
+    })();
+  }, []);
+
+  const buildDraftDoc = (draftId: string, name: string, originalName: string): RtiDocument => ({
+    id: draftId,
+    customer_name: name,
+    rti_type: "RTI",
+    status: "pending",
+    original_path: "",
+    original_name: originalName,
+    edited_path: null,
+    final_name: null,
+    plan_json: null,
+    rti_type_selected: null,
+    deletion_scheduled_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+
+  /** Create a brand-new manual draft (empty), and switch to it. */
+  const createNewDraft = async (files: File[]) => {
+    cacheCurrentProject();
     manualSessionIdRef.current = crypto.randomUUID();
-
-    resetLocalState();
+    const draftId = `${DRAFT_PREFIX}${crypto.randomUUID()}`;
+    const displayName =
+      files[0]?.name?.replace(/\.pdf$/i, "") ??
+      `Manual Draft ${new Date().toLocaleString()}`;
     const initialName = files[0]?.name?.replace(/\.pdf$/i, "") ?? "";
-    const manualDoc: RtiDocument = {
-      id: MANUAL_PROJECT_ID,
-      customer_name: "Manual Edit",
-      rti_type: "RTI",
-      status: "pending",
-      original_path: "",
-      original_name: files[0]?.name ?? "manual-edit.pdf",
-      edited_path: null,
-      final_name: null,
-      plan_json: null,
-      rti_type_selected: null,
-      deletion_scheduled_at: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    setActiveDoc(manualDoc);
+    resetLocalState();
+    const draftDoc = buildDraftDoc(draftId, displayName, files[0]?.name ?? "manual-edit.pdf");
+    setActiveDoc(draftDoc);
     setPdfName(initialName);
+
+    // Seed empty draft record so it appears in sidebar right away.
+    const now = new Date().toISOString();
+    const emptyDraft: ManualDraft = {
+      id: draftId,
+      name: displayName,
+      pdfName: initialName,
+      createdAt: now,
+      updatedAt: now,
+      originals: [],
+      items: [],
+      timeline: [],
+    };
+    await saveDraft(emptyDraft);
+    await refreshDrafts();
 
     if (files.length === 0) return;
 
@@ -579,6 +613,110 @@ function Index() {
       setLoadingDoc(false);
     }
   };
+
+  /** Legacy alias — accept files to create a new draft. */
+  const openManualProject = createNewDraft;
+
+  /** Open an existing draft from IndexedDB. */
+  const openDraft = async (draftId: string) => {
+    if (activeDoc?.id === draftId) return;
+    cacheCurrentProject();
+    setLoadingDoc(true);
+    draftLoadingRef.current = true;
+    setStatus({ kind: "working", pct: 0, label: "Loading draft…" });
+    resetLocalState();
+    manualSessionIdRef.current = crypto.randomUUID();
+    try {
+      const d = await loadDraft(draftId);
+      if (!d) {
+        setStatus({ kind: "error", message: "Draft not found." });
+        setLoadingDoc(false);
+        draftLoadingRef.current = false;
+        return;
+      }
+      const doc = buildDraftDoc(
+        draftId,
+        d.name,
+        d.originals[0]?.name ?? "manual-edit.pdf",
+      );
+      setActiveDoc(doc);
+      setPdfName(d.pdfName ?? "");
+
+      const loadedOriginals: { id: string; name: string; file: File }[] = [];
+      const countsMap: Record<string, number> = {};
+      for (const o of d.originals) {
+        const file = new File([o.file.blob], o.file.name, {
+          type: o.file.type || "application/pdf",
+        });
+        loadedOriginals.push({ id: o.id, name: o.name, file });
+        try {
+          countsMap[o.id] = await getPdfPageCount(`orig-${o.id}`, file);
+        } catch {
+          countsMap[o.id] = 0;
+        }
+      }
+      setOriginals(loadedOriginals);
+      setOriginalPageCounts(countsMap);
+
+      const restoredItems: MergeItem[] = [];
+      const nextThumbs: Record<string, string[]> = {};
+      const nextCounts: Record<string, number> = {};
+      for (const it of d.items) {
+        const file = new File([it.file.blob], it.file.name, {
+          type: it.file.type || (it.kind === "pdf" ? "application/pdf" : "image/*"),
+        });
+        restoredItems.push({ id: it.id, name: it.name, kind: it.kind, file });
+        if (it.kind === "image") {
+          const url = URL.createObjectURL(file);
+          objectUrlsRef.current.push(url);
+          nextThumbs[it.id] = [url];
+          nextCounts[it.id] = 1;
+        } else {
+          try {
+            nextCounts[it.id] = await getPdfPageCount(`item-${it.id}`, file);
+          } catch {
+            nextCounts[it.id] = 1;
+          }
+        }
+      }
+      setItems(restoredItems);
+      setItemThumbs(nextThumbs);
+      setItemPageCounts(nextCounts);
+      setTimeline(d.timeline);
+      setStatus({ kind: "idle" });
+    } catch (err) {
+      setStatus({ kind: "error", message: `Failed to load draft: ${(err as Error).message}` });
+    } finally {
+      setLoadingDoc(false);
+      // small delay to skip the initial auto-save triggered by state hydration
+      setTimeout(() => { draftLoadingRef.current = false; }, 250);
+    }
+  };
+
+  const renameDraft = async (id: string, name: string) => {
+    await renameDraftStore(id, name);
+    if (activeDoc?.id === id) {
+      setActiveDoc({ ...activeDoc, customer_name: name });
+    }
+    await refreshDrafts();
+  };
+
+  const deleteDraft = async (id: string) => {
+    // optimistic UI
+    setDrafts((prev) => prev.filter((d) => d.id !== id));
+    if (activeDoc?.id === id) {
+      setActiveDoc(null);
+      resetLocalState();
+    }
+    try {
+      await deleteDraftStore(id);
+      toast.success("Draft deleted");
+    } catch (e) {
+      toast.error("Failed to delete draft");
+      await refreshDrafts();
+    }
+  };
+
 
   // Poll mobile uploads for the active DB project.
   useEffect(() => {
