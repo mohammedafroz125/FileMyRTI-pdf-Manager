@@ -135,13 +135,14 @@ export function RtiSidebar({
                   </button>
                   <button
                     type="button"
-                    onClick={async (e) => {
+                    onClick={(e) => {
                       e.stopPropagation();
                       if (!confirm(`Delete project "${d.customer_name}"? This cannot be undone.`)) {
                         return;
                       }
-                      await onDelete(d);
-                      await refresh();
+                      // Optimistic: hide row locally; caller performs background delete.
+                      setDocs((prev) => prev.filter((x) => x.id !== d.id));
+                      void Promise.resolve(onDelete(d));
                     }}
                     className="mt-1.5 h-8 w-8 shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-red-50 hover:text-red-600"
                     aria-label={`Delete ${d.customer_name}`}
@@ -154,7 +155,67 @@ export function RtiSidebar({
             );
           })}
         </ul>
+
+        {drafts.length > 0 && (
+          <div className="mt-5">
+            <div className="mb-1 flex items-center gap-2 px-2">
+              <FileEdit className="h-3.5 w-3.5 text-muted-foreground" />
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Manual Drafts ({drafts.length})
+              </h3>
+            </div>
+            <ul className="flex flex-col gap-1">
+              {drafts.map((d) => {
+                const active = d.id === activeDraftId;
+                return (
+                  <li key={d.id}>
+                    <div
+                      className={`flex items-stretch gap-1 rounded-lg px-1 py-0.5 transition-colors ${
+                        active ? "bg-amber-50 ring-1 ring-amber-300" : "hover:bg-accent"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onSelectDraft?.(d.id)}
+                        onDoubleClick={() => {
+                          const name = prompt("Rename draft", d.name);
+                          if (name && name.trim()) onRenameDraft?.(d.id, name.trim());
+                        }}
+                        className="min-w-0 flex-1 rounded-md px-2 py-2 text-left"
+                        title="Click to open · double-click to rename"
+                      >
+                        <div className="flex items-start gap-2">
+                          <FileEdit className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-foreground">{d.name}</p>
+                            <p className="truncate text-[11px] text-muted-foreground">
+                              {new Date(d.updatedAt).toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!confirm(`Delete draft "${d.name}"?`)) return;
+                          onDeleteDraft?.(d.id);
+                        }}
+                        className="mt-1.5 h-8 w-8 shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                        aria-label={`Delete draft ${d.name}`}
+                        title="Delete draft"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </div>
     </aside>
   );
 }
+
