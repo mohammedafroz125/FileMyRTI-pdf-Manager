@@ -20,11 +20,13 @@ import {
   Ban,
   Download,
 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Dropzone } from "@/components/Dropzone";
 import { PageThumb } from "@/components/PageThumb";
 import { RtiSidebar } from "@/components/RtiSidebar";
 import { QrPhonePanel } from "@/components/QrPhonePanel";
+import { ImagePreviewModal } from "@/components/ImagePreviewModal";
 import { mergeByPlan, type MergeItem, type PlanEntry } from "@/lib/pdf-merge";
 import { getPdfPageCount, renderPdfPage, evictPdfDoc } from "@/lib/pdf-thumbnails";
 import {
@@ -42,6 +44,17 @@ import {
   type SavedPlanItem,
   type SavedTimelineEntry,
 } from "@/lib/rti-storage";
+import {
+  deleteDraft as deleteDraftStore,
+  listDrafts,
+  loadDraft,
+  reconcileIndex,
+  renameDraft as renameDraftStore,
+  saveDraft,
+  type DraftSummary,
+  type ManualDraft,
+} from "@/lib/manual-drafts";
+
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -73,7 +86,9 @@ const STATUS_TEXT: Record<RtiStatus, string> = {
   completed: "🟢 Successful",
 };
 
-const MANUAL_PROJECT_ID = "manual-edit";
+const MANUAL_PROJECT_ID = "manual-edit"; // legacy
+const DRAFT_PREFIX = "draft:";
+const isDraftId = (id: string | null | undefined) => !!id && id.startsWith(DRAFT_PREFIX);
 
 type ProjectCacheEntry = {
   activeDoc: RtiDocument;
@@ -97,6 +112,7 @@ function classify(file: File): "pdf" | "image" | "word" | null {
     return "word";
   return null;
 }
+
 
 function sanitizeFile(name: string): string {
   return name.replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim();
@@ -200,6 +216,11 @@ function Index() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const manualSessionIdRef = useRef<string>(crypto.randomUUID());
+  const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  const draftLoadingRef = useRef(false);
+  const draftSaveTimerRef = useRef<number | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
+
 
   const originalsById = useMemo(() => {
     const m = new Map<string, { name: string; file: File }>();
@@ -213,10 +234,12 @@ function Index() {
     return m;
   }, [items]);
 
-  const isManualProject = activeDoc?.id === MANUAL_PROJECT_ID;
+  const isManualProject = isDraftId(activeDoc?.id) || isDraftId(activeDoc?.id ?? null);
+  const activeDraftId = isDraftId(activeDoc?.id ?? null) ? (activeDoc?.id ?? null) : null;
 
   const cacheCurrentProject = () => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID || loadingDoc) return;
+    if (!activeDoc || isManualProject || loadingDoc) return;
+
     projectCacheRef.current[activeDoc.id] = {
       activeDoc,
       originals,
@@ -478,36 +501,70 @@ function Index() {
     }
   };
 
-  const openManualProject = async (files: File[]) => {
-    if (activeDoc?.id === MANUAL_PROJECT_ID && files.length === 0) {
-      // already open, just re-focus
-      return;
+  const refreshDrafts = async () => {
+    try {
+      const list = await listDrafts();
+      setDrafts(list);
+    } catch (e) {
+      console.error(e);
     }
-    if (activeDoc?.id === MANUAL_PROJECT_ID) {
-      if (!confirm("Discard current Manual Edit?")) return;
-    }
+  };
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        await reconcileIndex();
+      } catch {
+        /* ignore */
+      }
+      await refreshDrafts();
+    })();
+  }, []);
+
+  const buildDraftDoc = (draftId: string, name: string, originalName: string): RtiDocument => ({
+    id: draftId,
+    customer_name: name,
+    rti_type: "RTI",
+    status: "pending",
+    original_path: "",
+    original_name: originalName,
+    edited_path: null,
+    final_name: null,
+    plan_json: null,
+    rti_type_selected: null,
+    deletion_scheduled_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+
+  /** Create a brand-new manual draft (empty), and switch to it. */
+  const createNewDraft = async (files: File[]) => {
+    cacheCurrentProject();
     manualSessionIdRef.current = crypto.randomUUID();
-
-    resetLocalState();
+    const draftId = `${DRAFT_PREFIX}${crypto.randomUUID()}`;
+    const displayName =
+      files[0]?.name?.replace(/\.pdf$/i, "") ??
+      `Manual Draft ${new Date().toLocaleString()}`;
     const initialName = files[0]?.name?.replace(/\.pdf$/i, "") ?? "";
-    const manualDoc: RtiDocument = {
-      id: MANUAL_PROJECT_ID,
-      customer_name: "Manual Edit",
-      rti_type: "RTI",
-      status: "pending",
-      original_path: "",
-      original_name: files[0]?.name ?? "manual-edit.pdf",
-      edited_path: null,
-      final_name: null,
-      plan_json: null,
-      rti_type_selected: null,
-      deletion_scheduled_at: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    setActiveDoc(manualDoc);
+    resetLocalState();
+    const draftDoc = buildDraftDoc(draftId, displayName, files[0]?.name ?? "manual-edit.pdf");
+    setActiveDoc(draftDoc);
     setPdfName(initialName);
+
+    // Seed empty draft record so it appears in sidebar right away.
+    const now = new Date().toISOString();
+    const emptyDraft: ManualDraft = {
+      id: draftId,
+      name: displayName,
+      pdfName: initialName,
+      createdAt: now,
+      updatedAt: now,
+      originals: [],
+      items: [],
+      timeline: [],
+    };
+    await saveDraft(emptyDraft);
+    await refreshDrafts();
 
     if (files.length === 0) return;
 
@@ -557,9 +614,113 @@ function Index() {
     }
   };
 
+  /** Legacy alias — accept files to create a new draft. */
+  const openManualProject = createNewDraft;
+
+  /** Open an existing draft from IndexedDB. */
+  const openDraft = async (draftId: string) => {
+    if (activeDoc?.id === draftId) return;
+    cacheCurrentProject();
+    setLoadingDoc(true);
+    draftLoadingRef.current = true;
+    setStatus({ kind: "working", pct: 0, label: "Loading draft…" });
+    resetLocalState();
+    manualSessionIdRef.current = crypto.randomUUID();
+    try {
+      const d = await loadDraft(draftId);
+      if (!d) {
+        setStatus({ kind: "error", message: "Draft not found." });
+        setLoadingDoc(false);
+        draftLoadingRef.current = false;
+        return;
+      }
+      const doc = buildDraftDoc(
+        draftId,
+        d.name,
+        d.originals[0]?.name ?? "manual-edit.pdf",
+      );
+      setActiveDoc(doc);
+      setPdfName(d.pdfName ?? "");
+
+      const loadedOriginals: { id: string; name: string; file: File }[] = [];
+      const countsMap: Record<string, number> = {};
+      for (const o of d.originals) {
+        const file = new File([o.file.blob], o.file.name, {
+          type: o.file.type || "application/pdf",
+        });
+        loadedOriginals.push({ id: o.id, name: o.name, file });
+        try {
+          countsMap[o.id] = await getPdfPageCount(`orig-${o.id}`, file);
+        } catch {
+          countsMap[o.id] = 0;
+        }
+      }
+      setOriginals(loadedOriginals);
+      setOriginalPageCounts(countsMap);
+
+      const restoredItems: MergeItem[] = [];
+      const nextThumbs: Record<string, string[]> = {};
+      const nextCounts: Record<string, number> = {};
+      for (const it of d.items) {
+        const file = new File([it.file.blob], it.file.name, {
+          type: it.file.type || (it.kind === "pdf" ? "application/pdf" : "image/*"),
+        });
+        restoredItems.push({ id: it.id, name: it.name, kind: it.kind, file });
+        if (it.kind === "image") {
+          const url = URL.createObjectURL(file);
+          objectUrlsRef.current.push(url);
+          nextThumbs[it.id] = [url];
+          nextCounts[it.id] = 1;
+        } else {
+          try {
+            nextCounts[it.id] = await getPdfPageCount(`item-${it.id}`, file);
+          } catch {
+            nextCounts[it.id] = 1;
+          }
+        }
+      }
+      setItems(restoredItems);
+      setItemThumbs(nextThumbs);
+      setItemPageCounts(nextCounts);
+      setTimeline(d.timeline);
+      setStatus({ kind: "idle" });
+    } catch (err) {
+      setStatus({ kind: "error", message: `Failed to load draft: ${(err as Error).message}` });
+    } finally {
+      setLoadingDoc(false);
+      // small delay to skip the initial auto-save triggered by state hydration
+      setTimeout(() => { draftLoadingRef.current = false; }, 250);
+    }
+  };
+
+  const renameDraft = async (id: string, name: string) => {
+    await renameDraftStore(id, name);
+    if (activeDoc?.id === id) {
+      setActiveDoc({ ...activeDoc, customer_name: name });
+    }
+    await refreshDrafts();
+  };
+
+  const deleteDraft = async (id: string) => {
+    // optimistic UI
+    setDrafts((prev) => prev.filter((d) => d.id !== id));
+    if (activeDoc?.id === id) {
+      setActiveDoc(null);
+      resetLocalState();
+    }
+    try {
+      await deleteDraftStore(id);
+      toast.success("Draft deleted");
+    } catch (e) {
+      toast.error("Failed to delete draft");
+      await refreshDrafts();
+    }
+  };
+
+
   // Poll mobile uploads for the active DB project.
   useEffect(() => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
+    if (!activeDoc || isManualProject) return;
     let cancelled = false;
     const tick = async () => {
       try {
@@ -678,7 +839,7 @@ function Index() {
 
   // Live-update status via realtime
   useEffect(() => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
+    if (!activeDoc || isManualProject) return;
     const channel = supabase
       .channel(`rti_doc_${activeDoc.id}`)
       .on(
@@ -699,7 +860,7 @@ function Index() {
 
   // ---- Auto-persist plan for real projects (debounced) ----
   const persistPlan = async () => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
+    if (!activeDoc || isManualProject) return;
     try {
       const nextPaths = { ...itemPaths };
       let changed = false;
@@ -721,7 +882,7 @@ function Index() {
   };
 
   useEffect(() => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID || loadingDoc) return;
+    if (!activeDoc || isManualProject || loadingDoc) return;
     if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
     persistTimerRef.current = window.setTimeout(() => {
       void persistPlan();
@@ -731,6 +892,80 @@ function Index() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, timeline, activeDoc?.id, loadingDoc]);
+
+  // ---- Auto-save manual draft to IndexedDB (debounced) ----
+  useEffect(() => {
+    if (!activeDraftId || draftLoadingRef.current || loadingDoc) return;
+    if (draftSaveTimerRef.current) window.clearTimeout(draftSaveTimerRef.current);
+    draftSaveTimerRef.current = window.setTimeout(async () => {
+      try {
+        const draft: ManualDraft = {
+          id: activeDraftId,
+          name: activeDoc?.customer_name ?? "Manual Draft",
+          pdfName,
+          createdAt: activeDoc?.created_at ?? new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          originals: originals.map((o) => ({
+            id: o.id,
+            name: o.name,
+            file: { name: o.file.name, type: o.file.type, blob: o.file },
+          })),
+          items: items.map((it) => ({
+            id: it.id,
+            name: it.name,
+            kind: it.kind,
+            file: { name: it.file.name, type: it.file.type, blob: it.file },
+          })),
+          timeline,
+        };
+        await saveDraft(draft);
+        await refreshDrafts();
+      } catch (e) {
+        console.error("Draft auto-save failed", e);
+      }
+    }, 700);
+    return () => {
+      if (draftSaveTimerRef.current) window.clearTimeout(draftSaveTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDraftId, originals, items, timeline, pdfName, loadingDoc]);
+
+  /** Insert a pasted image after the last "original-page" entry (ACK position). */
+  const insertPastedImageEntry = (itemId: string) => {
+    setTimeline((prev) => {
+      let lastOrig = -1;
+      for (let i = 0; i < prev.length; i++) {
+        if (prev[i].type === "original-page") lastOrig = i;
+      }
+      const entry: SavedTimelineEntry = {
+        id: `entry-${crypto.randomUUID()}`,
+        type: "item",
+        itemId,
+        pageIndex: 0,
+      };
+      const idx = lastOrig + 1;
+      const copy = [...prev];
+      copy.splice(idx, 0, entry);
+      return copy;
+    });
+  };
+
+  /** Attach a pasted image as an item and insert after the original PDF. */
+  const attachPastedImage = async (file: File) => {
+    const it: MergeItem = {
+      id: `item-${crypto.randomUUID()}`,
+      name: file.name || `pasted-${Date.now()}.png`,
+      kind: "image",
+      file,
+    };
+    setItems((prev) => [...prev, it]);
+    const url = URL.createObjectURL(file);
+    objectUrlsRef.current.push(url);
+    setItemThumbs((prev) => ({ ...prev, [it.id]: [url] }));
+    setItemPageCounts((prev) => ({ ...prev, [it.id]: 1 }));
+    insertPastedImageEntry(it.id);
+    toast.success("Image pasted and inserted after original");
+  };
 
   const addFiles = async (files: File[]) => {
     setStatus({ kind: "working", pct: 0, label: "Processing files…" });
@@ -755,9 +990,57 @@ function Index() {
     else setStatus({ kind: "idle" });
   };
 
+  // ---- Global paste (Ctrl+V) + drag/drop support ----
+  useEffect(() => {
+    if (!activeDoc) return;
+    const onPaste = async (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imageFiles: File[] = [];
+      const otherFiles: File[] = [];
+      for (const it of Array.from(items)) {
+        if (it.kind === "file") {
+          const f = it.getAsFile();
+          if (!f) continue;
+          if (f.type.startsWith("image/")) imageFiles.push(f);
+          else otherFiles.push(f);
+        }
+      }
+      if (!imageFiles.length && !otherFiles.length) return;
+      e.preventDefault();
+      for (const img of imageFiles) await attachPastedImage(img);
+      if (otherFiles.length) await addFiles(otherFiles);
+    };
+    const onDragOver = (e: DragEvent) => { e.preventDefault(); };
+    const onDrop = async (e: DragEvent) => {
+      if (!e.dataTransfer?.files?.length) return;
+      const target = e.target as HTMLElement | null;
+      // Let Dropzone handle its own drop events
+      if (target?.closest("[data-dropzone-root]")) return;
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer.files);
+      const images = files.filter((f) => f.type.startsWith("image/"));
+      const rest = files.filter((f) => !f.type.startsWith("image/"));
+      for (const img of images) await attachPastedImage(img);
+      if (rest.length) await addFiles(rest);
+    };
+    window.addEventListener("paste", onPaste);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc?.id]);
+
   const removeEntry = (entryId: string) => {
     setTimeline((prev) => prev.filter((e) => e.id !== entryId));
   };
+
 
   const rotateEntry = (entryId: string) => {
     setTimeline((prev) =>
@@ -847,7 +1130,7 @@ function Index() {
         return;
       }
 
-      if (activeDoc.id === MANUAL_PROJECT_ID) {
+      if (isManualProject) {
         setStatus({ kind: "done", message: `Saved ${filename}` });
         return;
       }
@@ -913,13 +1196,23 @@ function Index() {
   };
 
   const deleteProject = async (doc: RtiDocument) => {
-    await deleteDocumentData(doc.id);
+    // Optimistic: remove from local cache and clear active state immediately.
     delete projectCacheRef.current[doc.id];
     if (activeDoc?.id === doc.id) {
       setActiveDoc(null);
       resetLocalState();
     }
+    // Background delete + toast; sidebar refreshes itself via realtime.
+    void (async () => {
+      try {
+        await deleteDocumentData(doc.id);
+        toast.success(`Deleted "${doc.customer_name}"`);
+      } catch (e) {
+        toast.error(`Failed to delete: ${(e as Error).message}`);
+      }
+    })();
   };
+
 
   const canGenerate = timeline.length > 0 && status.kind !== "working" && !loadingDoc && !!activeDoc;
 
@@ -989,7 +1282,7 @@ function Index() {
       const fallback = activeDoc.original_name.replace(/\.pdf$/i, "") || "Merged_PDF";
       const rawName = pdfName.trim() || fallback;
       const base = /\.pdf$/i.test(rawName) ? rawName.replace(/\.pdf$/i, "") : rawName;
-      const suffix = pageRange.trim() ? `_p${pageRange.replace(/\s+/g, "")}` : "";
+      const suffix = "";
       downloadBlob(blob, sanitizeFile(`${base}${suffix}.pdf`));
       setStatus({ kind: "done", message: "Downloaded" });
     } catch (err) {
@@ -1015,8 +1308,22 @@ function Index() {
         activeId={activeDoc?.id ?? null}
         onSelect={openDocument}
         onDelete={deleteProject}
-        onManualEdit={() => openManualProject([])}
+        onManualEdit={() => createNewDraft([])}
+        drafts={drafts}
+        activeDraftId={activeDraftId}
+        onSelectDraft={openDraft}
+        onDeleteDraft={deleteDraft}
+        onRenameDraft={renameDraft}
       />
+      {previewImage && (
+        <ImagePreviewModal
+          src={previewImage.src}
+          alt={previewImage.alt}
+          onClose={() => setPreviewImage(null)}
+        />
+      )}
+
+
 
       <input
         ref={replaceInputRef}
@@ -1198,7 +1505,13 @@ function Index() {
                                 onDelete={() => removeEntry(entry.id)}
                                 onRotate={() => rotateEntry(entry.id)}
                                 onReplace={() => startReplace(entry.id)}
+                                onExpand={
+                                  item.kind === "image" && thumb
+                                    ? () => setPreviewImage({ src: thumb, alt: item.name })
+                                    : undefined
+                                }
                               />
+
                             </div>
                           );
                         })}
@@ -1256,7 +1569,7 @@ function Index() {
                     ) : (
                       <>
                         <Save className="h-4 w-4" />
-                        Generate &amp; Save
+                        Save As
                       </>
                     )}
                   </button>

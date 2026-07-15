@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { Camera, Image as ImageIcon, CheckCircle2, AlertCircle, Upload } from "lucide-react";
+import { ScanLine, Image as ImageIcon, CheckCircle2, AlertCircle, Upload, FolderOpen } from "lucide-react";
 import { getTokenInfo, uploadMobileFile, type MobileToken } from "@/lib/rti-storage";
+
 
 export const Route = createFileRoute("/m/upload/$token")({
   ssr: false,
@@ -22,8 +23,10 @@ function MobileUploadPage() {
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
+  const scanRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
+  const filesRef = useRef<HTMLInputElement>(null);
+
 
   useEffect(() => {
     getTokenInfo(token)
@@ -71,11 +74,15 @@ function MobileUploadPage() {
         </div>
 
         <div className="space-y-3 rounded-xl border border-border bg-white p-4 shadow-sm">
+          {/* Scan Document — some Android browsers open the native document scanner
+              for this combo (image/* + capture=environment). Others fall back to the
+              camera. Either way it goes straight into a scanning-friendly capture flow. */}
           <input
-            ref={cameraRef}
+            ref={scanRef}
             type="file"
             accept="image/*"
             capture="environment"
+            multiple
             className="hidden"
             onChange={(e) => {
               const fs = Array.from(e.target.files ?? []);
@@ -86,7 +93,19 @@ function MobileUploadPage() {
           <input
             ref={galleryRef}
             type="file"
-            accept="image/*,application/pdf,.pdf,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              const fs = Array.from(e.target.files ?? []);
+              if (fs.length) handleFiles(fs);
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={filesRef}
+            type="file"
+            accept="application/pdf,.pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             multiple
             className="hidden"
             onChange={(e) => {
@@ -98,10 +117,10 @@ function MobileUploadPage() {
           <button
             type="button"
             disabled={uploading}
-            onClick={() => cameraRef.current?.click()}
+            onClick={() => scanRef.current?.click()}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
           >
-            <Camera className="h-5 w-5" /> Take photo (Camera)
+            <ScanLine className="h-5 w-5" /> Scan Document
           </button>
           <button
             type="button"
@@ -109,12 +128,21 @@ function MobileUploadPage() {
             onClick={() => galleryRef.current?.click()}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 py-3 text-sm font-semibold text-foreground shadow-sm hover:bg-accent disabled:opacity-50"
           >
-            <ImageIcon className="h-5 w-5" /> Pick from gallery
+            <ImageIcon className="h-5 w-5" /> Gallery
+          </button>
+          <button
+            type="button"
+            disabled={uploading}
+            onClick={() => filesRef.current?.click()}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 py-3 text-sm font-semibold text-foreground shadow-sm hover:bg-accent disabled:opacity-50"
+          >
+            <FolderOpen className="h-5 w-5" /> Files
           </button>
 
           <p className="text-center text-xs text-muted-foreground">
-            ACK · Envelope · IPO · Court Fee · PDF · DOC · DOCX · Images
+            PDF · DOC · DOCX · JPG · JPEG · PNG · WEBP
           </p>
+
 
           {uploading && (
             <div className="flex items-center gap-2 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800">

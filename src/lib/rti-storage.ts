@@ -283,7 +283,10 @@ export async function uploadMobileFile(
           : "application/msword")
       : lower.endsWith(".png") || file.type === "image/png"
         ? "image/png"
-        : "image/jpeg";
+        : lower.endsWith(".webp") || file.type === "image/webp"
+          ? "image/webp"
+          : "image/jpeg";
+
   const path = `${docId}/items/${crypto.randomUUID()}-mobile-${slugify(file.name)}`;
   const { error } = await supabase.storage.from(BUCKET).upload(path, file, {
     contentType,
