@@ -1308,8 +1308,22 @@ function Index() {
         activeId={activeDoc?.id ?? null}
         onSelect={openDocument}
         onDelete={deleteProject}
-        onManualEdit={() => openManualProject([])}
+        onManualEdit={() => createNewDraft([])}
+        drafts={drafts}
+        activeDraftId={activeDraftId}
+        onSelectDraft={openDraft}
+        onDeleteDraft={deleteDraft}
+        onRenameDraft={renameDraft}
       />
+      {previewImage && (
+        <ImagePreviewModal
+          src={previewImage.src}
+          alt={previewImage.alt}
+          onClose={() => setPreviewImage(null)}
+        />
+      )}
+
+
 
       <input
         ref={replaceInputRef}
