@@ -1282,7 +1282,7 @@ function Index() {
       const fallback = activeDoc.original_name.replace(/\.pdf$/i, "") || "Merged_PDF";
       const rawName = pdfName.trim() || fallback;
       const base = /\.pdf$/i.test(rawName) ? rawName.replace(/\.pdf$/i, "") : rawName;
-      const suffix = pageRange.trim() ? `_p${pageRange.replace(/\s+/g, "")}` : "";
+      const suffix = "";
       downloadBlob(blob, sanitizeFile(`${base}${suffix}.pdf`));
       setStatus({ kind: "done", message: "Downloaded" });
     } catch (err) {
@@ -1549,7 +1549,7 @@ function Index() {
                     ) : (
                       <>
                         <Save className="h-4 w-4" />
-                        Generate &amp; Save
+                        Save As
                       </>
                     )}
                   </button>
