@@ -135,6 +135,11 @@ export const PageThumb = React.memo(function PageThumb({
         </span>
 
         <div className="absolute right-1 top-1 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+          {onExpand && (
+            <IconBtn onClick={onExpand} onPointerDown={stop} title="Expand preview">
+              <Maximize2 className="h-3.5 w-3.5" />
+            </IconBtn>
+          )}
           {onRotate && (
             <IconBtn onClick={onRotate} onPointerDown={stop} title="Rotate 90°">
               <RotateCw className="h-3.5 w-3.5" />
@@ -151,6 +156,7 @@ export const PageThumb = React.memo(function PageThumb({
             </IconBtn>
           )}
         </div>
+
       </div>
       <div className="border-t border-border px-2 py-1.5">
         <p className="truncate text-[11px] font-medium text-foreground">{label}</p>
