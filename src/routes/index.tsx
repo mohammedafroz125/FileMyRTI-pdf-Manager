@@ -234,10 +234,12 @@ function Index() {
     return m;
   }, [items]);
 
-  const isManualProject = activeDoc?.id === MANUAL_PROJECT_ID;
+  const isManualProject = activeDoc?.id === MANUAL_PROJECT_ID || isDraftId(activeDoc?.id ?? null);
+  const activeDraftId = isDraftId(activeDoc?.id ?? null) ? (activeDoc?.id ?? null) : null;
 
   const cacheCurrentProject = () => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID || loadingDoc) return;
+    if (!activeDoc || isManualProject || loadingDoc) return;
+
     projectCacheRef.current[activeDoc.id] = {
       activeDoc,
       originals,
