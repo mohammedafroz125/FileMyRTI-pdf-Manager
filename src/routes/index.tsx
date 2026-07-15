@@ -1505,7 +1505,13 @@ function Index() {
                                 onDelete={() => removeEntry(entry.id)}
                                 onRotate={() => rotateEntry(entry.id)}
                                 onReplace={() => startReplace(entry.id)}
+                                onExpand={
+                                  item.kind === "image" && thumb
+                                    ? () => setPreviewImage({ src: thumb, alt: item.name })
+                                    : undefined
+                                }
                               />
+
                             </div>
                           );
                         })}
