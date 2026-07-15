@@ -20,11 +20,13 @@ import {
   Ban,
   Download,
 } from "lucide-react";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Dropzone } from "@/components/Dropzone";
 import { PageThumb } from "@/components/PageThumb";
 import { RtiSidebar } from "@/components/RtiSidebar";
 import { QrPhonePanel } from "@/components/QrPhonePanel";
+import { ImagePreviewModal } from "@/components/ImagePreviewModal";
 import { mergeByPlan, type MergeItem, type PlanEntry } from "@/lib/pdf-merge";
 import { getPdfPageCount, renderPdfPage, evictPdfDoc } from "@/lib/pdf-thumbnails";
 import {
@@ -42,6 +44,17 @@ import {
   type SavedPlanItem,
   type SavedTimelineEntry,
 } from "@/lib/rti-storage";
+import {
+  deleteDraft as deleteDraftStore,
+  listDrafts,
+  loadDraft,
+  reconcileIndex,
+  renameDraft as renameDraftStore,
+  saveDraft,
+  type DraftSummary,
+  type ManualDraft,
+} from "@/lib/manual-drafts";
+
 
 export const Route = createFileRoute("/")({
   head: () => ({
