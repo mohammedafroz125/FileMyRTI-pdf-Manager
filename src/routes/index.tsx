@@ -893,6 +893,80 @@ function Index() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, timeline, activeDoc?.id, loadingDoc]);
 
+  // ---- Auto-save manual draft to IndexedDB (debounced) ----
+  useEffect(() => {
+    if (!activeDraftId || draftLoadingRef.current || loadingDoc) return;
+    if (draftSaveTimerRef.current) window.clearTimeout(draftSaveTimerRef.current);
+    draftSaveTimerRef.current = window.setTimeout(async () => {
+      try {
+        const draft: ManualDraft = {
+          id: activeDraftId,
+          name: activeDoc?.customer_name ?? "Manual Draft",
+          pdfName,
+          createdAt: activeDoc?.created_at ?? new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          originals: originals.map((o) => ({
+            id: o.id,
+            name: o.name,
+            file: { name: o.file.name, type: o.file.type, blob: o.file },
+          })),
+          items: items.map((it) => ({
+            id: it.id,
+            name: it.name,
+            kind: it.kind,
+            file: { name: it.file.name, type: it.file.type, blob: it.file },
+          })),
+          timeline,
+        };
+        await saveDraft(draft);
+        await refreshDrafts();
+      } catch (e) {
+        console.error("Draft auto-save failed", e);
+      }
+    }, 700);
+    return () => {
+      if (draftSaveTimerRef.current) window.clearTimeout(draftSaveTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDraftId, originals, items, timeline, pdfName, loadingDoc]);
+
+  /** Insert a pasted image after the last "original-page" entry (ACK position). */
+  const insertPastedImageEntry = (itemId: string) => {
+    setTimeline((prev) => {
+      let lastOrig = -1;
+      for (let i = 0; i < prev.length; i++) {
+        if (prev[i].type === "original-page") lastOrig = i;
+      }
+      const entry: SavedTimelineEntry = {
+        id: `entry-${crypto.randomUUID()}`,
+        type: "item",
+        itemId,
+        pageIndex: 0,
+      };
+      const idx = lastOrig + 1;
+      const copy = [...prev];
+      copy.splice(idx, 0, entry);
+      return copy;
+    });
+  };
+
+  /** Attach a pasted image as an item and insert after the original PDF. */
+  const attachPastedImage = async (file: File) => {
+    const it: MergeItem = {
+      id: `item-${crypto.randomUUID()}`,
+      name: file.name || `pasted-${Date.now()}.png`,
+      kind: "image",
+      file,
+    };
+    setItems((prev) => [...prev, it]);
+    const url = URL.createObjectURL(file);
+    objectUrlsRef.current.push(url);
+    setItemThumbs((prev) => ({ ...prev, [it.id]: [url] }));
+    setItemPageCounts((prev) => ({ ...prev, [it.id]: 1 }));
+    insertPastedImageEntry(it.id);
+    toast.success("Image pasted and inserted after original");
+  };
+
   const addFiles = async (files: File[]) => {
     setStatus({ kind: "working", pct: 0, label: "Processing files…" });
     const rejected: string[] = [];
@@ -916,9 +990,57 @@ function Index() {
     else setStatus({ kind: "idle" });
   };
 
+  // ---- Global paste (Ctrl+V) + drag/drop support ----
+  useEffect(() => {
+    if (!activeDoc) return;
+    const onPaste = async (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imageFiles: File[] = [];
+      const otherFiles: File[] = [];
+      for (const it of Array.from(items)) {
+        if (it.kind === "file") {
+          const f = it.getAsFile();
+          if (!f) continue;
+          if (f.type.startsWith("image/")) imageFiles.push(f);
+          else otherFiles.push(f);
+        }
+      }
+      if (!imageFiles.length && !otherFiles.length) return;
+      e.preventDefault();
+      for (const img of imageFiles) await attachPastedImage(img);
+      if (otherFiles.length) await addFiles(otherFiles);
+    };
+    const onDragOver = (e: DragEvent) => { e.preventDefault(); };
+    const onDrop = async (e: DragEvent) => {
+      if (!e.dataTransfer?.files?.length) return;
+      const target = e.target as HTMLElement | null;
+      // Let Dropzone handle its own drop events
+      if (target?.closest("[data-dropzone-root]")) return;
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer.files);
+      const images = files.filter((f) => f.type.startsWith("image/"));
+      const rest = files.filter((f) => !f.type.startsWith("image/"));
+      for (const img of images) await attachPastedImage(img);
+      if (rest.length) await addFiles(rest);
+    };
+    window.addEventListener("paste", onPaste);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc?.id]);
+
   const removeEntry = (entryId: string) => {
     setTimeline((prev) => prev.filter((e) => e.id !== entryId));
   };
+
 
   const rotateEntry = (entryId: string) => {
     setTimeline((prev) =>
