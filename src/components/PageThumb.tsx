@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FileText, Image as ImageIcon, X, RotateCw, Replace } from "lucide-react";
+import { FileText, Image as ImageIcon, X, RotateCw, Replace, Maximize2 } from "lucide-react";
 
 type Props = {
   id: string;
@@ -15,7 +15,9 @@ type Props = {
   onDelete?: () => void;
   onRotate?: () => void;
   onReplace?: () => void;
+  onExpand?: () => void;
 };
+
 
 import React, { useEffect, useRef, useState } from "react";
 
