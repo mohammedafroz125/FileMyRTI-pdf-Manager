@@ -1196,13 +1196,23 @@ function Index() {
   };
 
   const deleteProject = async (doc: RtiDocument) => {
-    await deleteDocumentData(doc.id);
+    // Optimistic: remove from local cache and clear active state immediately.
     delete projectCacheRef.current[doc.id];
     if (activeDoc?.id === doc.id) {
       setActiveDoc(null);
       resetLocalState();
     }
+    // Background delete + toast; sidebar refreshes itself via realtime.
+    void (async () => {
+      try {
+        await deleteDocumentData(doc.id);
+        toast.success(`Deleted "${doc.customer_name}"`);
+      } catch (e) {
+        toast.error(`Failed to delete: ${(e as Error).message}`);
+      }
+    })();
   };
+
 
   const canGenerate = timeline.length > 0 && status.kind !== "working" && !loadingDoc && !!activeDoc;
 
