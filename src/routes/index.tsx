@@ -234,7 +234,7 @@ function Index() {
     return m;
   }, [items]);
 
-  const isManualProject = activeDoc?.id === MANUAL_PROJECT_ID || isDraftId(activeDoc?.id ?? null);
+  const isManualProject = isDraftId(activeDoc?.id) || isDraftId(activeDoc?.id ?? null);
   const activeDraftId = isDraftId(activeDoc?.id ?? null) ? (activeDoc?.id ?? null) : null;
 
   const cacheCurrentProject = () => {
@@ -502,11 +502,11 @@ function Index() {
   };
 
   const openManualProject = async (files: File[]) => {
-    if (activeDoc?.id === MANUAL_PROJECT_ID && files.length === 0) {
+    if (isDraftId(activeDoc?.id) && files.length === 0) {
       // already open, just re-focus
       return;
     }
-    if (activeDoc?.id === MANUAL_PROJECT_ID) {
+    if (isDraftId(activeDoc?.id)) {
       if (!confirm("Discard current Manual Edit?")) return;
     }
 
@@ -582,7 +582,7 @@ function Index() {
 
   // Poll mobile uploads for the active DB project.
   useEffect(() => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
+    if (!activeDoc || isManualProject) return;
     let cancelled = false;
     const tick = async () => {
       try {
@@ -701,7 +701,7 @@ function Index() {
 
   // Live-update status via realtime
   useEffect(() => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
+    if (!activeDoc || isManualProject) return;
     const channel = supabase
       .channel(`rti_doc_${activeDoc.id}`)
       .on(
@@ -722,7 +722,7 @@ function Index() {
 
   // ---- Auto-persist plan for real projects (debounced) ----
   const persistPlan = async () => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID) return;
+    if (!activeDoc || isManualProject) return;
     try {
       const nextPaths = { ...itemPaths };
       let changed = false;
@@ -744,7 +744,7 @@ function Index() {
   };
 
   useEffect(() => {
-    if (!activeDoc || activeDoc.id === MANUAL_PROJECT_ID || loadingDoc) return;
+    if (!activeDoc || isManualProject || loadingDoc) return;
     if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
     persistTimerRef.current = window.setTimeout(() => {
       void persistPlan();
@@ -870,7 +870,7 @@ function Index() {
         return;
       }
 
-      if (activeDoc.id === MANUAL_PROJECT_ID) {
+      if (isManualProject) {
         setStatus({ kind: "done", message: `Saved ${filename}` });
         return;
       }
