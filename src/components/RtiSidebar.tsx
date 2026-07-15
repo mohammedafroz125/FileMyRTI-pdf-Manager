@@ -1,14 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Plus, FileText, RefreshCw, Trash2, Pencil } from "lucide-react";
+import { Plus, FileText, RefreshCw, Trash2, Pencil, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { listDocuments, type RtiDocument, type RtiStatus } from "@/lib/rti-storage";
+import type { DraftSummary } from "@/lib/manual-drafts";
 
 type Props = {
   activeId?: string | null;
   onSelect: (doc: RtiDocument) => void;
-  onDelete: (doc: RtiDocument) => Promise<void>;
+  onDelete: (doc: RtiDocument) => Promise<void> | void;
   onManualEdit: () => void;
+  drafts?: DraftSummary[];
+  activeDraftId?: string | null;
+  onSelectDraft?: (id: string) => void;
+  onDeleteDraft?: (id: string) => void;
+  onRenameDraft?: (id: string, name: string) => void;
 };
 
 const STATUS_META: Record<RtiStatus, { dot: string; label: string; text: string }> = {
@@ -18,7 +24,18 @@ const STATUS_META: Record<RtiStatus, { dot: string; label: string; text: string 
   completed: { dot: "bg-green-500", label: "Successful", text: "text-green-700" },
 };
 
-export function RtiSidebar({ activeId, onSelect, onDelete, onManualEdit }: Props) {
+export function RtiSidebar({
+  activeId,
+  onSelect,
+  onDelete,
+  onManualEdit,
+  drafts = [],
+  activeDraftId = null,
+  onSelectDraft,
+  onDeleteDraft,
+  onRenameDraft,
+}: Props) {
+
   const [docs, setDocs] = useState<RtiDocument[]>([]);
   const [loading, setLoading] = useState(true);
 
