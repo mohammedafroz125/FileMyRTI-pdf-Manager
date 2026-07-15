@@ -33,7 +33,9 @@ export const PageThumb = React.memo(function PageThumb({
   onDelete,
   onRotate,
   onReplace,
+  onExpand,
 }: Props) {
+
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
   });
