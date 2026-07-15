@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { Camera, Image as ImageIcon, CheckCircle2, AlertCircle, Upload } from "lucide-react";
+import { ScanLine, Image as ImageIcon, CheckCircle2, AlertCircle, Upload, FolderOpen } from "lucide-react";
 import { getTokenInfo, uploadMobileFile, type MobileToken } from "@/lib/rti-storage";
+
 
 export const Route = createFileRoute("/m/upload/$token")({
   ssr: false,
