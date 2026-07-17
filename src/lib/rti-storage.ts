@@ -258,6 +258,25 @@ export async function createMobileToken(docId: string, ttlMinutes = 120): Promis
   return data as MobileToken;
 }
 
+export async function getOrCreateActiveMobileToken(docId: string, ttlMinutes = 120): Promise<MobileToken> {
+  // Try to find an existing active token that is still valid for at least 5 more seconds
+  const { data } = await supabase
+    .from("rti_mobile_tokens")
+    .select("*")
+    .eq("document_id", docId)
+    .gt("expires_at", new Date(Date.now() + 5000).toISOString())
+    .order("expires_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (data) {
+    return data as MobileToken;
+  }
+
+  // Otherwise, create a new one
+  return createMobileToken(docId, ttlMinutes);
+}
+
 export async function getTokenInfo(token: string): Promise<MobileToken | null> {
   const { data } = await supabase
     .from("rti_mobile_tokens")

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { QrCode, RefreshCw, Copy, Check, AlertCircle } from "lucide-react";
-import { createMobileToken, type MobileToken } from "@/lib/rti-storage";
+import { createMobileToken, getOrCreateActiveMobileToken, type MobileToken } from "@/lib/rti-storage";
 
 /** Pass sessionId to override the DB document_id used for the token.
  *  This is used by Manual Edit, which uses a local-only session UUID
@@ -22,11 +22,13 @@ export function QrPhonePanel({ docId, sessionId }: Props) {
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/m/upload/${token.token}`
     : "";
 
-  const generate = async () => {
+  const generate = async (forceRefresh = false) => {
     setBusy(true);
     setGenError(null);
     try {
-      const t = await createMobileToken(effectiveId, 120);
+      const t = forceRefresh
+        ? await createMobileToken(effectiveId, 120)
+        : await getOrCreateActiveMobileToken(effectiveId, 120);
       setToken(t);
       lastGeneratedFor.current = effectiveId;
       const u = `${window.location.origin}/m/upload/${t.token}`;
@@ -44,7 +46,7 @@ export function QrPhonePanel({ docId, sessionId }: Props) {
     setDataUrl(null);
     setGenError(null);
     lastGeneratedFor.current = null;
-    void generate();
+    void generate(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveId]);
 
@@ -68,7 +70,7 @@ export function QrPhonePanel({ docId, sessionId }: Props) {
         </div>
         <button
           type="button"
-          onClick={generate}
+          onClick={() => generate(true)}
           disabled={busy}
           className="rounded-md p-1.5 text-muted-foreground hover:bg-accent disabled:opacity-40"
           title="Regenerate QR"
@@ -86,7 +88,7 @@ export function QrPhonePanel({ docId, sessionId }: Props) {
               <p className="text-xs text-red-600">{genError}</p>
               <button
                 type="button"
-                onClick={generate}
+                onClick={() => generate(false)}
                 disabled={busy}
                 className="mt-1 rounded-md bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
               >
