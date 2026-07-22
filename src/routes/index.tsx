@@ -25,6 +25,7 @@ import {
   ChevronRight,
   QrCode,
   Image as ImageIcon,
+  ArrowLeft,
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -161,26 +162,7 @@ async function savePdfBlob(blob: Blob, filename: string): Promise<boolean> {
 async function fileToPdf(file: File): Promise<File | null> {
   const kind = classify(file);
   if (kind === "pdf") {
-    try {
-      const { PDFDocument } = await import("pdf-lib");
-      const bytes = await file.arrayBuffer();
-      const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
-      const form = doc.getForm();
-      if (form) {
-        try {
-          form.flatten();
-        } catch {
-          /* ignore */
-        }
-      }
-      const optimizedBytes = await doc.save({ useObjectStreams: true });
-      const ab = new ArrayBuffer(optimizedBytes.byteLength);
-      new Uint8Array(ab).set(optimizedBytes);
-      return new File([ab], file.name, { type: "application/pdf" });
-    } catch (e) {
-      console.warn("PDF optimization on import failed, returning original file", e);
-      return file;
-    }
+    return file;
   }
   if (kind === "image") {
     try {
@@ -294,6 +276,7 @@ function Index() {
   const [rtiTypeSelected, setRtiTypeSelected] = useState<RtiTypeSelected>("RTI Application");
   const [userToggledAppend, setUserToggledAppend] = useState(false);
   const [appendRtiType, setAppendRtiType] = useState(true);
+  const [mobileView, setMobileView] = useState<"queue" | "workspace">("queue");
 
   const isFullDownload = !pageRange.trim();
   const effectiveAppendRTI = userToggledAppend ? appendRtiType : isFullDownload;
@@ -519,6 +502,7 @@ function Index() {
   };
 
   const openDocument = async (doc: RtiDocument) => {
+    setMobileView("workspace");
     if (activeDoc?.id === doc.id) return;
     cacheCurrentProject();
     const cached = projectCacheRef.current[doc.id];
@@ -745,6 +729,7 @@ function Index() {
 
   /** Create a brand-new manual draft (empty), and switch to it. */
   const createNewDraft = async (files: File[] = []) => {
+    setMobileView("workspace");
     if (isCreatingDraft) return;
     setIsCreatingDraft(true);
     try {
@@ -840,6 +825,7 @@ function Index() {
 
   /** Open an existing draft from IndexedDB. */
   const openDraft = async (draftId: string) => {
+    setMobileView("workspace");
     if (activeDoc?.id === draftId) return;
     cacheCurrentProject();
     setLoadingDoc(true);
@@ -1611,17 +1597,30 @@ function Index() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <RtiSidebar
-        activeId={activeDoc?.id ?? null}
-        onSelect={openDocument}
-        onDelete={deleteProject}
-        onManualEdit={() => createNewDraft([])}
-        drafts={drafts}
-        activeDraftId={activeDraftId}
-        onSelectDraft={openDraft}
-        onDeleteDraft={deleteDraft}
-        onRenameDraft={renameDraft}
-      />
+      {/* Queue & Drafts Sidebar: 100% width on mobile when in 'queue' mode, side-by-side on md+ */}
+      <div className={`w-full md:w-72 shrink-0 ${mobileView === "queue" ? "flex h-screen" : "hidden md:flex md:h-screen"}`}>
+        <RtiSidebar
+          activeId={activeDoc?.id ?? null}
+          onSelect={(doc) => {
+            openDocument(doc);
+            setMobileView("workspace");
+          }}
+          onDelete={deleteProject}
+          onManualEdit={() => {
+            createNewDraft([]);
+            setMobileView("workspace");
+          }}
+          drafts={drafts}
+          activeDraftId={activeDraftId}
+          onSelectDraft={(id) => {
+            openDraft(id);
+            setMobileView("workspace");
+          }}
+          onDeleteDraft={deleteDraft}
+          onRenameDraft={renameDraft}
+        />
+      </div>
+
       {previewImage && (
         <ImagePreviewModal
           src={previewImage.src}
@@ -1639,8 +1638,6 @@ function Index() {
         />
       )}
 
-
-
       <input
         ref={replaceInputRef}
         type="file"
@@ -1652,15 +1649,33 @@ function Index() {
         }}
       />
 
-      <div className="min-w-0 flex-1 overflow-y-auto">
+      {/* Project Workspace Container: 100% width on mobile when in 'workspace' mode, flex-1 on md+ */}
+      <div className={`min-w-0 flex-1 overflow-y-auto ${mobileView === "workspace" ? "block h-screen" : "hidden md:block md:h-screen"}`}>
+        {/* Mobile Sticky Navigation Header with Back Button */}
+        <div className="md:hidden sticky top-0 z-20 flex items-center justify-between border-b border-border bg-white px-4 py-2.5 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setMobileView("queue")}
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-slate-100 px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200 active:bg-slate-300 transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4 text-slate-600" />
+            <span>Back to Queue</span>
+          </button>
+          {activeDoc && (
+            <div className="flex items-center gap-2 text-xs font-bold text-slate-700 truncate max-w-[160px]">
+              <span className="truncate">{activeDoc.customer_name}</span>
+            </div>
+          )}
+        </div>
+
         <header className="border-b border-border bg-white">
-          <div className="mx-auto flex max-w-5xl items-center gap-3 px-6 py-5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white">
+          <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 sm:px-6 py-4 sm:py-5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white shrink-0">
               <FileText className="h-5 w-5" />
             </div>
-            <div className="flex-1">
-              <h1 className="text-lg font-semibold text-foreground">RTI PDF Manager</h1>
-              <p className="text-xs text-muted-foreground">
+            <div className="flex-1 min-w-0">
+              <h1 className="text-base sm:text-lg font-semibold text-foreground truncate">RTI PDF Manager</h1>
+              <p className="text-xs text-muted-foreground truncate">
                 Internal tool · Merge PDFs &amp; images · ACK workflow
               </p>
             </div>

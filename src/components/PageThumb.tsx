@@ -140,25 +140,25 @@ export const PageThumb = React.memo(function PageThumb({
           {badgeText}
         </span>
 
-        <div className="absolute right-1 top-1 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="absolute right-1 top-1 flex flex-col gap-1.5 opacity-100 md:opacity-0 transition-opacity md:group-hover:opacity-100">
           {onExpand && (
             <IconBtn onClick={() => onExpand(id)} onPointerDown={stop} title="View full screen">
-              <Eye className="h-3.5 w-3.5" />
+              <Eye className="h-4 w-4" />
             </IconBtn>
           )}
           {onRotate && (
             <IconBtn onClick={() => onRotate(id)} onPointerDown={stop} title="Rotate 90°">
-              <RotateCw className="h-3.5 w-3.5" />
+              <RotateCw className="h-4 w-4" />
             </IconBtn>
           )}
           {onReplace && (
             <IconBtn onClick={() => onReplace(id)} onPointerDown={stop} title="Replace page">
-              <Replace className="h-3.5 w-3.5" />
+              <Replace className="h-4 w-4" />
             </IconBtn>
           )}
           {onDelete && (
             <IconBtn onClick={() => onDelete(id)} onPointerDown={stop} title="Delete page" danger>
-              <Trash2 className="h-3.5 w-3.5" />
+              <Trash2 className="h-4 w-4" />
             </IconBtn>
           )}
         </div>
@@ -195,7 +195,9 @@ function IconBtn({
         e.stopPropagation();
         onClick(e);
       }}
-      className={`rounded-full bg-white/95 p-1 shadow ${danger ? "text-red-600 hover:bg-red-50" : "text-slate-700 hover:bg-blue-50"}`}
+      className={`flex min-h-[36px] min-w-[36px] items-center justify-center rounded-full bg-white/95 p-2 shadow-md transition-colors ${
+        danger ? "text-red-600 hover:bg-red-50 active:bg-red-100" : "text-slate-700 hover:bg-blue-50 active:bg-blue-100"
+      }`}
     >
       {children}
     </button>

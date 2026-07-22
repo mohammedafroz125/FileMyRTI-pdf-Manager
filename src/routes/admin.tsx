@@ -165,36 +165,36 @@ function AdminUpload() {
             <button
               type="button"
               onClick={() => navigate({ to: "/" })}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors"
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors"
             >
-              <ArrowLeft className="h-3.5 w-3.5" /> Back to Dashboard
+              <ArrowLeft className="h-4 w-4" /> Back to Dashboard
             </button>
             <div>
-              <h1 className="text-base font-bold text-slate-900 tracking-tight">Admin Upload</h1>
+              <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">Admin Upload</h1>
               <p className="text-xs text-slate-500">Create new RTI projects for processing</p>
             </div>
           </div>
 
           {/* Controls: Bulk Toggle + Progress & Dynamic Create Button */}
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-3">
             {/* Bulk Upload Toggle with Exact User Label */}
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors select-none">
+            <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors select-none">
               <input
                 type="checkbox"
                 checked={bulkUploadMode}
                 onChange={(e) => setBulkUploadMode(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 accent-blue-600 cursor-pointer"
+                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 accent-blue-600 cursor-pointer"
               />
-              <span className="flex items-center gap-1.5">
-                <Layers className="h-3.5 w-3.5 text-blue-600" />
+              <span className="flex items-center gap-1.5 leading-tight">
+                <Layers className="h-4 w-4 text-blue-600 shrink-0" />
                 If multiple PDFs are selected, create multiple projects
               </span>
             </label>
 
             {/* Ready Progress Indicator */}
             {slots.length > 0 && (
-              <span className="inline-flex items-center gap-1.5 rounded-md bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700 border border-blue-200/60">
-                <Sparkles className="h-3 w-3" />
+              <span className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 border border-blue-200/60">
+                <Sparkles className="h-3.5 w-3.5" />
                 {readyCount} of {slots.length} Projects Ready
               </span>
             )}
@@ -205,11 +205,11 @@ function AdminUpload() {
                 type="button"
                 onClick={uploadAllReady}
                 disabled={isUploadingAll}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-bold text-white shadow hover:bg-blue-700 transition-colors disabled:opacity-50"
+                className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs sm:text-sm font-bold text-white shadow hover:bg-blue-700 transition-colors disabled:opacity-50"
               >
                 {isUploadingAll ? (
                   <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Creating Projects...
+                    <Loader2 className="h-4 w-4 animate-spin" /> Creating Projects...
                   </>
                 ) : (
                   `Create ${readyCount === 1 ? "1 Project" : `${readyCount} Projects`}`

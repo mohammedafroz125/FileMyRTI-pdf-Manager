@@ -72,18 +72,18 @@ export function RtiSidebar({
   );
 
   return (
-    <aside className="sticky top-0 flex h-screen w-72 shrink-0 flex-col border-r border-border bg-slate-50">
+    <aside className="sticky top-0 flex h-full md:h-screen w-full md:w-72 shrink-0 flex-col border-r border-border bg-slate-50">
       {/* Sticky Header */}
       <div className="bg-white border-b border-border px-4 py-3 shrink-0">
         <div className="flex items-center justify-between mb-2">
           <div>
             <h1 className="text-sm font-bold text-slate-800 tracking-tight">RTI PDF Manager</h1>
-            <p className="text-[11px] text-muted-foreground">Queue & Drafts</p>
+            <p className="text-[11px] text-muted-foreground">Queue &amp; Drafts</p>
           </div>
           <button
             type="button"
             onClick={refresh}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-slate-100 hover:text-slate-700 transition-colors"
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-2 text-muted-foreground hover:bg-slate-100 hover:text-slate-700 transition-colors"
             aria-label="Refresh"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -92,15 +92,15 @@ export function RtiSidebar({
 
         {/* Search Projects Box */}
         <div className="relative mt-2">
-          <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 pointer-events-none text-muted-foreground">
-            <Search className="h-3.5 w-3.5 text-slate-400" />
+          <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-muted-foreground">
+            <Search className="h-4 w-4 text-slate-400" />
           </span>
           <input
             type="text"
             placeholder="Search projects or drafts..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full rounded-lg border border-input bg-slate-50 pl-8 pr-3 py-1.5 text-xs shadow-inner focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all"
+            className="w-full rounded-lg border border-input bg-slate-50 pl-9 pr-3 min-h-[44px] text-xs shadow-inner focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all"
           />
         </div>
 
@@ -108,16 +108,16 @@ export function RtiSidebar({
         <div className="grid grid-cols-2 gap-2 mt-3">
           <Link
             to="/admin"
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 active:scale-95 transition-all text-center"
+            className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 active:scale-95 transition-all text-center"
           >
-            <Plus className="h-3.5 w-3.5" /> Admin Upload
+            <Plus className="h-4 w-4" /> Admin Upload
           </Link>
           <button
             type="button"
             onClick={onManualEdit}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-white py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 active:scale-95 transition-all"
+            className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 active:scale-95 transition-all"
           >
-            <Pencil className="h-3.5 w-3.5" /> Manual Edit
+            <Pencil className="h-4 w-4" /> Manual Edit
           </button>
         </div>
       </div>
