@@ -64,7 +64,19 @@ export async function mergeByPlan(
     onProgress?.(Math.round((done / plan.length) * 100));
   }
 
-  const finalBytes = await out.save();
+  // Flatten forms to optimize loading and flatten fillable fields
+  const form = out.getForm();
+  if (form) {
+    try {
+      form.flatten();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const finalBytes = await out.save({
+    useObjectStreams: true,
+  });
   const ab = new ArrayBuffer(finalBytes.byteLength);
   new Uint8Array(ab).set(finalBytes);
   return new Blob([ab], { type: "application/pdf" });

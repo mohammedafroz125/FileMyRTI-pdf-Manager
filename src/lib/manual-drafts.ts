@@ -3,6 +3,8 @@
 // (pdf/image) and the timeline plan. Files are stored as Blob + name.
 import { get, set, del, keys } from "idb-keyval";
 
+import type { RtiTypeSelected } from "./rti-storage";
+
 export type DraftFileBlob = { name: string; type: string; blob: Blob };
 
 export type DraftOriginal = { id: string; name: string; file: DraftFileBlob };
@@ -22,6 +24,9 @@ export type ManualDraft = {
   pdfName: string;
   createdAt: string;
   updatedAt: string;
+  status?: "pending" | "completed";
+  sessionId?: string;
+  rtiType?: RtiTypeSelected;
   originals: DraftOriginal[];
   items: DraftItem[];
   timeline: DraftTimelineEntry[];
@@ -35,15 +40,25 @@ export type DraftSummary = {
   name: string;
   updatedAt: string;
   createdAt: string;
+  status?: "pending" | "completed";
+  rtiType?: RtiTypeSelected;
 };
 
 async function readIndex(): Promise<DraftSummary[]> {
-  const v = (await get<DraftSummary[]>(INDEX_KEY)) ?? [];
-  return v;
+  try {
+    const v = (await get<DraftSummary[]>(INDEX_KEY)) ?? [];
+    return v;
+  } catch {
+    return [];
+  }
 }
 
 async function writeIndex(list: DraftSummary[]) {
-  await set(INDEX_KEY, list);
+  try {
+    await set(INDEX_KEY, list);
+  } catch (err) {
+    console.warn("Failed to write draft index to IndexedDB", err);
+  }
 }
 
 export async function listDrafts(): Promise<DraftSummary[]> {
@@ -52,7 +67,11 @@ export async function listDrafts(): Promise<DraftSummary[]> {
 }
 
 export async function loadDraft(id: string): Promise<ManualDraft | null> {
-  return (await get<ManualDraft>(KEY_PREFIX + id)) ?? null;
+  try {
+    return (await get<ManualDraft>(KEY_PREFIX + id)) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function saveDraft(draft: ManualDraft): Promise<void> {
@@ -64,6 +83,8 @@ export async function saveDraft(draft: ManualDraft): Promise<void> {
     name: draft.name,
     updatedAt: draft.updatedAt,
     createdAt: draft.createdAt,
+    status: draft.status,
+    rtiType: draft.rtiType,
   };
   const filtered = idx.filter((d) => d.id !== draft.id);
   filtered.unshift(summary);
@@ -110,6 +131,8 @@ export async function reconcileIndex(): Promise<void> {
         name: d.name,
         updatedAt: d.updatedAt,
         createdAt: d.createdAt,
+        status: d.status,
+        rtiType: d.rtiType,
       });
   }
   if (additions.length) await writeIndex([...additions, ...idx]);

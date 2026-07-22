@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FileText, Image as ImageIcon, X, RotateCw, Replace, Maximize2 } from "lucide-react";
+import { FileText, Image as ImageIcon, X, RotateCw, Replace, Eye, Trash2 } from "lucide-react";
 
 type Props = {
   id: string;
@@ -10,14 +10,14 @@ type Props = {
   loading?: boolean;
   kind: "original" | "pdf" | "image";
   rotation?: number;
+  isSelected?: boolean;
   /** Lazy loader; called once when the thumb enters viewport if `thumbnail` is null. */
   getThumbnail?: () => Promise<string | null>;
-  onDelete?: () => void;
-  onRotate?: () => void;
-  onReplace?: () => void;
-  onExpand?: () => void;
+  onDelete?: (id: string) => void;
+  onRotate?: (id: string) => void;
+  onReplace?: (id: string) => void;
+  onExpand?: (id: string) => void;
 };
-
 
 import React, { useEffect, useRef, useState } from "react";
 
@@ -29,6 +29,7 @@ export const PageThumb = React.memo(function PageThumb({
   loading,
   kind,
   rotation = 0,
+  isSelected = false,
   getThumbnail,
   onDelete,
   onRotate,
@@ -112,7 +113,12 @@ export const PageThumb = React.memo(function PageThumb({
       style={style}
       {...attributes}
       {...listeners}
-      className="group relative flex cursor-grab touch-none flex-col overflow-hidden rounded-lg border border-border bg-white shadow-sm hover:border-blue-400 hover:shadow-md active:cursor-grabbing"
+      onDoubleClick={() => onExpand?.(id)}
+      className={`group relative flex cursor-grab touch-none flex-col overflow-hidden rounded-xl border bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing ${
+        isSelected
+          ? "border-blue-600 ring-2 ring-blue-500/30 shadow-md"
+          : "border-slate-200 hover:border-blue-400"
+      }`}
     >
       <div className="relative flex aspect-[3/4] items-center justify-center overflow-hidden bg-slate-50">
         {shownThumb ? (
@@ -136,23 +142,23 @@ export const PageThumb = React.memo(function PageThumb({
 
         <div className="absolute right-1 top-1 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100">
           {onExpand && (
-            <IconBtn onClick={onExpand} onPointerDown={stop} title="Expand preview">
-              <Maximize2 className="h-3.5 w-3.5" />
+            <IconBtn onClick={() => onExpand(id)} onPointerDown={stop} title="View full screen">
+              <Eye className="h-3.5 w-3.5" />
             </IconBtn>
           )}
           {onRotate && (
-            <IconBtn onClick={onRotate} onPointerDown={stop} title="Rotate 90°">
+            <IconBtn onClick={() => onRotate(id)} onPointerDown={stop} title="Rotate 90°">
               <RotateCw className="h-3.5 w-3.5" />
             </IconBtn>
           )}
           {onReplace && (
-            <IconBtn onClick={onReplace} onPointerDown={stop} title="Replace page">
+            <IconBtn onClick={() => onReplace(id)} onPointerDown={stop} title="Replace page">
               <Replace className="h-3.5 w-3.5" />
             </IconBtn>
           )}
           {onDelete && (
-            <IconBtn onClick={onDelete} onPointerDown={stop} title="Delete page" danger>
-              <X className="h-3.5 w-3.5" />
+            <IconBtn onClick={() => onDelete(id)} onPointerDown={stop} title="Delete page" danger>
+              <Trash2 className="h-3.5 w-3.5" />
             </IconBtn>
           )}
         </div>
@@ -183,6 +189,7 @@ function IconBtn({
     <button
       type="button"
       title={title}
+      aria-label={title}
       onPointerDown={onPointerDown}
       onClick={(e) => {
         e.stopPropagation();

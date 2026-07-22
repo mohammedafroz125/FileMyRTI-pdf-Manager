@@ -1,11 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { QrCode, RefreshCw, Copy, Check, AlertCircle } from "lucide-react";
+import { QrCode, Copy, Check, AlertCircle, RefreshCw } from "lucide-react";
 import { createMobileToken, getOrCreateActiveMobileToken, type MobileToken } from "@/lib/rti-storage";
 
-/** Pass sessionId to override the DB document_id used for the token.
- *  This is used by Manual Edit, which uses a local-only session UUID
- *  so the token can be created without a real rti_documents row. */
 type Props = { docId: string; sessionId?: string };
 
 export function QrPhonePanel({ docId, sessionId }: Props) {
@@ -15,8 +12,6 @@ export function QrPhonePanel({ docId, sessionId }: Props) {
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
-  // Track whether we have already generated for the current effectiveId.
-  const lastGeneratedFor = useRef<string | null>(null);
 
   const url = token
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/m/upload/${token.token}`
@@ -30,9 +25,8 @@ export function QrPhonePanel({ docId, sessionId }: Props) {
         ? await createMobileToken(effectiveId, 120)
         : await getOrCreateActiveMobileToken(effectiveId, 120);
       setToken(t);
-      lastGeneratedFor.current = effectiveId;
       const u = `${window.location.origin}/m/upload/${t.token}`;
-      const png = await QRCode.toDataURL(u, { margin: 1, width: 220 });
+      const png = await QRCode.toDataURL(u, { margin: 1, width: 140 });
       setDataUrl(png);
     } catch (err) {
       setGenError((err as Error).message ?? "Failed to generate QR");
@@ -45,10 +39,26 @@ export function QrPhonePanel({ docId, sessionId }: Props) {
     setToken(null);
     setDataUrl(null);
     setGenError(null);
-    lastGeneratedFor.current = null;
     void generate(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveId]);
+
+  // Auto-regenerate token in background when it approaches expiry
+  useEffect(() => {
+    if (!token) return;
+    const expiresAtMs = new Date(token.expires_at).getTime();
+
+    const interval = setInterval(() => {
+      const remainingMs = expiresAtMs - Date.now();
+      if (remainingMs <= 5000) {
+        void generate(true);
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [token, effectiveId]);
+
+  const [qrModalOpen, setQrModalOpen] = useState(false);
 
   const copy = async () => {
     if (!url) return;
@@ -58,75 +68,106 @@ export function QrPhonePanel({ docId, sessionId }: Props) {
   };
 
   return (
-    <section className="rounded-xl border border-border bg-white p-5 shadow-sm">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div>
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <QrCode className="h-4 w-4" /> Phone upload
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            Scan to upload ACK, envelope, IPO, court fee or images from your phone.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => generate(true)}
-          disabled={busy}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent disabled:opacity-40"
-          title="Regenerate QR"
-        >
-          <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
-        </button>
-      </div>
-      <div className="flex items-center gap-4">
-        <div className="flex h-[220px] w-[220px] shrink-0 items-center justify-center rounded-lg border border-border bg-slate-50">
-          {dataUrl ? (
-            <img src={dataUrl} alt="QR code" className="h-full w-full" />
-          ) : genError ? (
-            <div className="flex flex-col items-center gap-2 px-4 text-center">
-              <AlertCircle className="h-6 w-6 text-red-500" />
-              <p className="text-xs text-red-600">{genError}</p>
-              <button
-                type="button"
-                onClick={() => generate(false)}
-                disabled={busy}
-                className="mt-1 rounded-md bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
-              >
-                Retry
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <RefreshCw className="h-4 w-4 animate-spin text-blue-500" />
-              <span className="text-xs text-muted-foreground">Generating…</span>
-            </div>
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          {token && (
-            <>
-              <p className="text-xs text-muted-foreground">Expires</p>
-              <p className="text-sm font-medium text-foreground">
-                {new Date(token.expires_at).toLocaleTimeString()}
-              </p>
-              <p className="mt-3 text-xs text-muted-foreground">Link</p>
-              <div className="mt-1 flex items-center gap-2">
-                <code className="min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1 text-[11px] text-slate-700">
-                  {url}
-                </code>
-                <button
-                  type="button"
-                  onClick={copy}
-                  className="rounded-md border border-border bg-white p-1.5 text-muted-foreground hover:bg-accent"
-                  title="Copy link"
-                >
-                  {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
-                </button>
+    <>
+      <section className="rounded-xl border border-slate-200/80 bg-white p-3.5 shadow-sm">
+        <div className="flex items-center gap-4">
+          {/* Clickable QR Code Container */}
+          <div
+            onClick={() => dataUrl && setQrModalOpen(true)}
+            className="group relative flex h-24 w-24 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-1 shadow-inner hover:border-blue-400 hover:shadow-md transition-all"
+            title="Click to enlarge QR Code"
+          >
+            {dataUrl ? (
+              <>
+                <img src={dataUrl} alt="Phone Upload QR" className="h-full w-full object-contain" />
+                <div className="absolute inset-0 bg-slate-900/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-lg">
+                  <span className="bg-slate-900/90 text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow">Enlarge</span>
+                </div>
+              </>
+            ) : genError ? (
+              <div className="text-center p-1">
+                <AlertCircle className="h-4 w-4 text-red-500 mx-auto mb-1" />
+                <p className="text-[9px] text-red-600 font-medium">Error</p>
               </div>
-            </>
-          )}
+            ) : (
+              <div className="flex items-center gap-1">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-500" />
+              </div>
+            )}
+          </div>
+
+          {/* Info & Link */}
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <h3 className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                <QrCode className="h-3.5 w-3.5 text-blue-600" /> Phone Upload / Scanner
+              </h3>
+              {token && (
+                <span className="text-[10px] font-medium text-slate-400">
+                  Expires at {new Date(token.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-500 leading-tight">
+              Scan with your phone to upload ACK, envelope, court fee, or images straight into this project.
+            </p>
+
+            {token && (
+              <div className="pt-1 flex items-center gap-2">
+                <div className="min-w-0 flex-1 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 flex items-center justify-between">
+                  <span className="truncate font-mono text-[10px] text-slate-600">{url}</span>
+                  <button
+                    type="button"
+                    onClick={copy}
+                    className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600 hover:text-blue-700 shrink-0"
+                    title="Copy upload link"
+                  >
+                    {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
+                    {copied ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+      {/* Enlarged QR Code Modal */}
+      {qrModalOpen && dataUrl && (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 p-4 animate-fade-in"
+          onClick={() => setQrModalOpen(false)}
+        >
+          <div
+            className="relative flex flex-col items-center rounded-2xl bg-white p-6 shadow-2xl max-w-sm w-full text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+              <QrCode className="h-4 w-4 text-blue-600" /> Scan QR Code
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Point your phone camera to upload document photos directly.
+            </p>
+
+            <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-inner mb-4">
+              <img src={dataUrl} alt="Enlarged QR Code" className="h-64 w-64 object-contain" />
+            </div>
+
+            <p className="text-[11px] text-slate-400 font-mono break-all mb-4 bg-slate-50 p-2 rounded border border-slate-200 w-full">
+              {url}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => setQrModalOpen(false)}
+              className="w-full rounded-lg bg-blue-600 py-2 text-xs font-bold text-white shadow hover:bg-blue-700 transition-colors"
+            >
+              Close Preview
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

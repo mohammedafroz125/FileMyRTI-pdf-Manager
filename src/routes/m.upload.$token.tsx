@@ -3,6 +3,57 @@ import { useEffect, useRef, useState } from "react";
 import { ScanLine, Image as ImageIcon, CheckCircle2, AlertCircle, Upload, FolderOpen } from "lucide-react";
 import { getTokenInfo, uploadMobileFile, type MobileToken } from "@/lib/rti-storage";
 
+async function optimizeImage(file: File): Promise<File> {
+  const lower = file.name.toLowerCase();
+  if (!/\.(jpe?g|png|webp)$/.test(lower) && !file.type.startsWith("image/")) return file;
+
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(file);
+          return;
+        }
+        const maxDim = 2000;
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        canvas.width = w;
+        canvas.height = h;
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob(
+          (blob) => {
+            if (blob && blob.size < file.size) {
+              const name = file.name.replace(/\.[^/.]+$/, "") + ".jpg";
+              resolve(new File([blob], name, { type: "image/jpeg" }));
+            } else {
+              resolve(file);
+            }
+          },
+          "image/jpeg",
+          0.82
+        );
+      };
+      img.onerror = () => resolve(file);
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = () => resolve(file);
+    reader.readAsDataURL(file);
+  });
+}
+
 
 export const Route = createFileRoute("/m/upload/$token")({
   ssr: false,
@@ -21,12 +72,11 @@ function MobileUploadPage() {
   const [info, setInfo] = useState<MobileToken | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "invalid" | "expired">("loading");
   const [uploading, setUploading] = useState(false);
+  const [selectedCount, setSelectedCount] = useState<number | null>(null);
   const [uploaded, setUploaded] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const scanRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const filesRef = useRef<HTMLInputElement>(null);
-
 
   useEffect(() => {
     getTokenInfo(token)
@@ -42,11 +92,13 @@ function MobileUploadPage() {
   const handleFiles = async (files: File[]) => {
     if (!info) return;
     setError(null);
+    setSelectedCount(files.length);
     setUploading(true);
     try {
       for (const f of files) {
-        await uploadMobileFile(info.document_id, token, f);
-        setUploaded((prev) => [f.name, ...prev]);
+        const optimized = await optimizeImage(f);
+        await uploadMobileFile(info.document_id, token, optimized);
+        setUploaded((prev) => [optimized.name, ...prev]);
       }
     } catch (err) {
       setError((err as Error).message);
@@ -68,28 +120,13 @@ function MobileUploadPage() {
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6">
       <div className="mx-auto max-w-md">
+        {/* Header */}
         <div className="mb-4 rounded-xl bg-blue-600 px-4 py-4 text-white shadow-sm">
-          <h1 className="text-lg font-semibold">Upload to RTI project</h1>
-          <p className="text-xs opacity-90">Files upload directly into the open project.</p>
+          <h1 className="text-lg font-bold">Upload Files</h1>
+          <p className="text-xs opacity-90 mt-0.5">Select images or PDFs to add directly to this project.</p>
         </div>
 
-        <div className="space-y-3 rounded-xl border border-border bg-white p-4 shadow-sm">
-          {/* Scan Document — some Android browsers open the native document scanner
-              for this combo (image/* + capture=environment). Others fall back to the
-              camera. Either way it goes straight into a scanning-friendly capture flow. */}
-          <input
-            ref={scanRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              const fs = Array.from(e.target.files ?? []);
-              if (fs.length) handleFiles(fs);
-              e.target.value = "";
-            }}
-          />
+        <div className="space-y-3.5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <input
             ref={galleryRef}
             type="file"
@@ -105,7 +142,7 @@ function MobileUploadPage() {
           <input
             ref={filesRef}
             type="file"
-            accept="application/pdf,.pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            accept="application/pdf,.pdf,.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
             multiple
             className="hidden"
             onChange={(e) => {
@@ -114,53 +151,55 @@ function MobileUploadPage() {
               e.target.value = "";
             }}
           />
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => scanRef.current?.click()}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
-          >
-            <ScanLine className="h-5 w-5" /> Scan Document
-          </button>
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => galleryRef.current?.click()}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 py-3 text-sm font-semibold text-foreground shadow-sm hover:bg-accent disabled:opacity-50"
-          >
-            <ImageIcon className="h-5 w-5" /> Gallery
-          </button>
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => filesRef.current?.click()}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 py-3 text-sm font-semibold text-foreground shadow-sm hover:bg-accent disabled:opacity-50"
-          >
-            <FolderOpen className="h-5 w-5" /> Files
-          </button>
 
-          <p className="text-center text-xs text-muted-foreground">
-            PDF · DOC · DOCX · JPG · JPEG · PNG · WEBP
+          {/* Identical Button Sizes & Styling */}
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => galleryRef.current?.click()}
+              className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-bold text-slate-800 shadow-sm hover:bg-slate-50 hover:border-blue-400 active:scale-[0.99] transition-all disabled:opacity-50"
+            >
+              <ImageIcon className="h-5 w-5 text-blue-600 shrink-0" /> Gallery
+            </button>
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => filesRef.current?.click()}
+              className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-bold text-slate-800 shadow-sm hover:bg-slate-50 hover:border-blue-400 active:scale-[0.99] transition-all disabled:opacity-50"
+            >
+              <FolderOpen className="h-5 w-5 text-blue-600 shrink-0" /> Files
+            </button>
+          </div>
+
+          <p className="text-center text-xs font-semibold text-slate-500 tracking-wide pt-1">
+            Supports: PDF, JPG, PNG, WEBP
           </p>
 
+          {/* Selection Confirmation */}
+          {selectedCount !== null && (
+            <div className="flex items-center justify-center gap-1.5 rounded-lg bg-blue-50/80 border border-blue-200 px-3 py-2 text-xs font-bold text-blue-700">
+              <span>✓ {selectedCount} {selectedCount === 1 ? "file" : "files"} selected</span>
+            </div>
+          )}
 
           {uploading && (
-            <div className="flex items-center gap-2 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800">
-              <Upload className="h-4 w-4 animate-pulse" /> Uploading…
+            <div className="flex items-center justify-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800">
+              <Upload className="h-4 w-4 animate-pulse text-blue-600" /> Uploading to project…
             </div>
           )}
           {error && (
-            <div className="flex items-center gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800">
-              <AlertCircle className="h-4 w-4" /> {error}
+            <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-800">
+              <AlertCircle className="h-4 w-4 shrink-0 text-red-600" /> {error}
             </div>
           )}
 
           {uploaded.length > 0 && (
-            <div className="rounded-md bg-green-50 p-3">
-              <div className="mb-1 flex items-center gap-1.5 text-sm font-medium text-green-800">
-                <CheckCircle2 className="h-4 w-4" /> Uploaded ({uploaded.length})
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200/60 p-3 space-y-1">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" /> Uploaded ({uploaded.length})
               </div>
-              <ul className="space-y-0.5 text-xs text-green-900/80">
+              <ul className="space-y-0.5 text-xs text-emerald-900/90 pl-1">
                 {uploaded.map((n, i) => (
                   <li key={i} className="truncate">• {n}</li>
                 ))}
