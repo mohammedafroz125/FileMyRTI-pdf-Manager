@@ -1,0 +1,336 @@
+import { useEffect, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { Plus, FileText, RefreshCw, Trash2, Pencil, FileEdit, ChevronDown, ChevronRight, Search } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { listDocuments, type RtiDocument, type RtiStatus } from "@/lib/rti-storage";
+import type { DraftSummary } from "@/lib/manual-drafts";
+
+type Props = {
+  activeId?: string | null;
+  onSelect: (doc: RtiDocument) => void;
+  onDelete: (doc: RtiDocument) => Promise<void> | void;
+  onManualEdit: () => void;
+  drafts?: DraftSummary[];
+  activeDraftId?: string | null;
+  onSelectDraft?: (id: string) => void;
+  onDeleteDraft?: (id: string) => void;
+  onRenameDraft?: (id: string, name: string) => void;
+};
+
+export function RtiSidebar({
+  activeId,
+  onSelect,
+  onDelete,
+  onManualEdit,
+  drafts = [],
+  activeDraftId = null,
+  onSelectDraft,
+  onDeleteDraft,
+  onRenameDraft,
+}: Props) {
+  const [docs, setDocs] = useState<RtiDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [draftsExpanded, setDraftsExpanded] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("sidebar_drafts_expanded") !== "false";
+    }
+    return true;
+  });
+
+  const refresh = async () => {
+    try {
+      setDocs(await listDocuments());
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+    const channel = supabase
+      .channel("rti_documents_sidebar")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rti_documents" },
+        () => refresh(),
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const filteredDocs = docs.filter((d) =>
+    d.customer_name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredDrafts = drafts.filter((d) =>
+    d.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <aside className="sticky top-0 flex h-full md:h-screen w-full md:w-72 shrink-0 flex-col border-r border-border bg-slate-50">
+      {/* Sticky Header */}
+      <div className="bg-white border-b border-border px-4 py-3 shrink-0">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h1 className="text-sm font-bold text-slate-800 tracking-tight">FileMyRTI PDF Manager</h1>
+            <p className="text-[11px] text-muted-foreground">Queue &amp; Drafts</p>
+          </div>
+          <button
+            type="button"
+            onClick={refresh}
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-2 text-muted-foreground hover:bg-slate-100 hover:text-slate-700 transition-colors"
+            aria-label="Refresh"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+
+        {/* Search Projects Box */}
+        <div className="relative mt-2">
+          <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-muted-foreground">
+            <Search className="h-4 w-4 text-slate-400" />
+          </span>
+          <input
+            type="text"
+            placeholder="Search projects or drafts..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-lg border border-input bg-slate-50 pl-9 pr-3 min-h-[44px] text-xs shadow-inner focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all"
+          />
+        </div>
+
+        {/* Sticky Actions */}
+        <div className="grid grid-cols-2 gap-2 mt-3">
+          <Link
+            to="/admin"
+            className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 active:scale-95 transition-all text-center"
+          >
+            <Plus className="h-4 w-4" /> Admin Upload
+          </Link>
+          <button
+            type="button"
+            onClick={onManualEdit}
+            className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-border bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 active:scale-95 transition-all"
+          >
+            <Pencil className="h-4 w-4" /> Manual Edit
+          </button>
+        </div>
+      </div>
+
+      {/* Scrollable Project List */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-4">
+        {/* Pending Queue Category */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              Pending Queue ({filteredDocs.length})
+            </span>
+          </div>
+
+          {filteredDocs.length === 0 ? (
+            <p className="px-3 py-4 text-center text-xs text-muted-foreground italic bg-white rounded-lg border border-dashed border-slate-200">
+              {searchQuery ? "No matching projects found." : "No projects in queue."}
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {filteredDocs.map((d) => {
+                const active = d.id === activeId;
+                const isCompleted = d.status === "completed";
+                return (
+                  <li key={d.id} className="group relative">
+                    <div
+                      className={`flex items-center justify-between rounded-xl p-2.5 transition-all duration-200 border ${
+                        active
+                          ? "bg-blue-50/80 border-blue-200 ring-1 ring-blue-100 shadow-sm"
+                          : "bg-white border-slate-100 hover:border-slate-200 hover:shadow-sm"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onSelect(d)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <div className={`p-1.5 rounded-lg ${active ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-500"}`}>
+                            <FileText className="h-4 w-4 shrink-0" />
+                          </div>
+                            <div className="min-w-0 flex-1">
+                              <p className={`truncate text-xs font-bold ${active ? "text-blue-950" : "text-slate-900"}`}>
+                                {d.customer_name}
+                              </p>
+                              <p className="truncate text-[10px] font-medium text-slate-500 mt-0.5">
+                                {d.rti_type_selected ?? "RTI Application"}
+                              </p>
+                              <div className="mt-1 flex items-center justify-between gap-1">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-bold border ${
+                                    isCompleted
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-200/60"
+                                      : "bg-amber-50 text-amber-700 border-amber-200/60"
+                                  }`}
+                                >
+                                  <span className={`h-1 w-1 rounded-full ${isCompleted ? "bg-emerald-500" : "bg-amber-500"}`} />
+                                  {isCompleted ? "Completed" : "Pending"}
+                                </span>
+                                <span className="text-[9px] text-slate-400 font-medium truncate">
+                                  {(() => {
+                                    const dObj = new Date(d.created_at);
+                                    if (isNaN(dObj.getTime())) return "";
+                                    const isToday = dObj.toDateString() === new Date().toDateString();
+                                    const time = dObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                    return isToday ? `Today ${time}` : `${dObj.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+                                  })()}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!confirm(`Delete project "${d.customer_name}"? This cannot be undone.`)) {
+                            return;
+                          }
+                          setDocs((prev) => prev.filter((x) => x.id !== d.id));
+                          void Promise.resolve(onDelete(d));
+                        }}
+                        className="opacity-0 group-hover:opacity-100 hover:bg-red-50 hover:text-red-600 rounded-lg p-1.5 text-muted-foreground transition-all shrink-0 ml-1"
+                        aria-label={`Delete ${d.customer_name}`}
+                        title="Delete project"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {/* Separator Line */}
+        <div className="border-t border-slate-200 mx-1" />
+
+        {/* Manual Drafts Category */}
+        <div className="space-y-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              const next = !draftsExpanded;
+              setDraftsExpanded(next);
+              if (typeof window !== "undefined") {
+                localStorage.setItem("sidebar_drafts_expanded", String(next));
+              }
+            }}
+            className="flex w-full items-center justify-between px-1 py-1 rounded-md hover:bg-slate-200/50 text-left transition-colors"
+          >
+            <div className="flex items-center gap-1.5">
+              <FileEdit className="h-3.5 w-3.5 text-slate-400" />
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Manual Drafts ({filteredDrafts.length})
+              </span>
+            </div>
+            {draftsExpanded ? (
+              <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+            )}
+          </button>
+
+          {draftsExpanded && (
+            <>
+              {filteredDrafts.length === 0 ? (
+                <p className="px-3 py-4 text-center text-xs text-muted-foreground italic bg-white rounded-lg border border-dashed border-slate-200">
+                  {searchQuery ? "No matching drafts found." : "No manual drafts."}
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-1.5">
+                  {filteredDrafts.map((d) => {
+                    const active = d.id === activeDraftId;
+                    const isCompleted = d.status === "completed";
+                    return (
+                      <li key={d.id} className="group relative">
+                        <div
+                          className={`flex items-center justify-between rounded-xl p-2.5 transition-all duration-200 border ${
+                            active
+                              ? "bg-blue-50/80 border-blue-200 ring-1 ring-blue-100 shadow-sm"
+                              : "bg-white border-slate-100 hover:border-slate-200 hover:shadow-sm"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => onSelectDraft?.(d.id)}
+                            onDoubleClick={() => {
+                              const name = prompt("Rename draft", d.name);
+                              if (name && name.trim()) onRenameDraft?.(d.id, name.trim());
+                            }}
+                            className="min-w-0 flex-1 text-left"
+                            title="Click to open · double-click to rename"
+                          >
+                            <div className="flex items-start gap-2.5">
+                              <div className={`p-1.5 rounded-lg ${active ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-500"}`}>
+                                <FileEdit className="h-4 w-4 shrink-0" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className={`truncate text-xs font-bold ${active ? "text-blue-950" : "text-slate-900"}`}>
+                                  {d.name}
+                                </p>
+                                <p className="truncate text-[10px] font-medium text-slate-500 mt-0.5">
+                                  Manual Draft
+                                </p>
+                                <div className="mt-1 flex items-center justify-between gap-1">
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-bold border ${
+                                      isCompleted
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200/60"
+                                        : "bg-amber-50 text-amber-700 border-amber-200/60"
+                                    }`}
+                                  >
+                                    <span className={`h-1 w-1 rounded-full ${isCompleted ? "bg-emerald-500" : "bg-amber-500"}`} />
+                                    {isCompleted ? "Completed" : "Pending"}
+                                  </span>
+                                  <span className="text-[9px] text-slate-400 font-medium truncate">
+                                    {(() => {
+                                      const dObj = new Date(d.updatedAt);
+                                      if (isNaN(dObj.getTime())) return "";
+                                      const isToday = dObj.toDateString() === new Date().toDateString();
+                                      const time = dObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                      return isToday ? `Today ${time}` : `${dObj.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+                                    })()}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!confirm(`Delete draft "${d.name}"?`)) return;
+                              onDeleteDraft?.(d.id);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 hover:bg-red-50 hover:text-red-600 rounded-lg p-1.5 text-muted-foreground transition-all shrink-0 ml-1"
+                            aria-label={`Delete draft ${d.name}`}
+                            title="Delete draft"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </aside>
+  );
+}
